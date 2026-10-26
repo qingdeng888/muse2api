@@ -1,0 +1,37 @@
+# 本地构建版 Compose（从当前目录源码构建镜像，不依赖 GitHub Actions）
+# 用法：
+#   docker compose -f docker-compose.local.yml up -d --build
+# 日常部署请使用 docker-compose.yml（直接拉取 ghcr.io 上的自动构建镜像）
+name: muse2api
+
+services:
+  muse2api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: muse2api:local
+    container_name: muse2api
+    restart: always
+    ports:
+      - "18610:18610"
+    environment:
+      # 管理与 API 鉴权 Key（从 .env 或宿主环境读取，留空则自动生成）
+      - MUSE2API_KEY=${MUSE2API_KEY:-}
+      # 服务对外基准 URL，如 https://your-domain.com（留空则管理前端自动检测当前域名）
+      - MUSE2API_PUBLIC_BASE=
+      # 超时配置（秒）
+      - MUSE2API_IMAGE_TIMEOUT=240
+      - MUSE2API_VIDEO_TIMEOUT=600
+      - MUSE2API_CHAT_TIMEOUT=300
+      # 最大并发任务数（按机器性能调整，默认 2）
+      - MUSE2API_CONCURRENCY=${MUSE2API_CONCURRENCY:-2}
+    volumes:
+      # 持久化账号配置、任务日志及媒体文件
+      - ./data:/app/data
+    shm_size: '2gb' # 保证 Chromium 渲染多标签页时不因 /dev/shm 耗尽崩溃
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:18610/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s

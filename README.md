@@ -58,27 +58,52 @@
 
 ### 方式一：Docker Compose（推荐，一行命令开箱即用）
 
-1. **克隆代码并进入目录**：
-   ```bash
-   git clone https://github.com/czg86389-hub/muse2api.git
-   cd muse2api
-   ```
+镜像由 GitHub Actions 在每次 `main` 分支提交后自动构建并推送到
+`ghcr.io/qingdeng888/muse2api`（同时提供 `linux/amd64` 与 `linux/arm64`），
+`docker-compose.yml` 默认直接拉取该镜像，**无需在服务器上编译**。
 
-2. **配置环境变量（可选）**：
+1. **获取 compose 文件与环境变量**（只需 `docker-compose.yml` + `.env`，不必拉全量源码）：
    ```bash
-   cp .env.example .env
+   mkdir -p muse2api && cd muse2api
+   curl -fsSLO https://raw.githubusercontent.com/qingdeng888/muse2api/main/docker-compose.yml
+   curl -fsSL  https://raw.githubusercontent.com/qingdeng888/muse2api/main/.env.example -o .env
    # 按需编辑 .env，建议修改 MUSE2API_KEY 为你自己的管理密钥
    ```
+   > 也可以直接 `git clone https://github.com/qingdeng888/muse2api.git && cd muse2api`，效果相同。
 
-   Docker Compose 会读取 `.env` 中的 `MUSE2API_KEY`，不会再被 Compose 文件中的示例值覆盖。
+   Docker Compose 会读取 `.env` 中的 `MUSE2API_KEY`，不会被 Compose 文件中的示例值覆盖。
 
-3. **启动容器**：
+2. **启动容器**：
    ```bash
    docker compose up -d
    ```
 
-4. **访问管理面板**：
+3. **访问管理面板**：
    打开浏览器访问：`http://<你的服务器IP>:18610/admin?key=<你的MUSE2API_KEY>`
+
+4. **升级到最新版本**（代码推送后 Actions 会自动构建，服务器侧只需重新拉取）：
+   ```bash
+   docker compose pull && docker compose up -d
+   ```
+
+   - 想固定某个版本或提交：在 `.env` 里设置
+     `MUSE2API_IMAGE=ghcr.io/qingdeng888/muse2api:1.6.3`（或 `:sha-1a2b3c4`、`:latest`）。
+
+#### 本地自行构建（不使用预构建镜像）
+
+如果改了代码想在本机构建，用仓库里的 `docker-compose.local.yml`：
+
+```bash
+git clone https://github.com/qingdeng888/muse2api.git && cd muse2api
+cp .env.example .env
+docker compose -f docker-compose.local.yml up -d --build
+```
+
+两个 compose 文件同名服务、同端口，请勿同时启动；换用时先 `docker compose down`。
+
+> ⚠️ 镜像首次推送后，GHCR 包默认是私有（匿名 `docker compose pull` 会 403）。
+> 可到 `https://github.com/users/qingdeng888/packages/container/muse2api/settings`
+> 把可见性改为 **Public**；私有镜像则需先 `docker login ghcr.io -u <你的GitHub用户名>`（密码填 Personal Access Token，带 `read:packages` 权限）。
 
 ---
 
@@ -335,7 +360,7 @@ python tests/test_vm_wait.py engine.py --assert
 
 更新到 v1.5.3 并重启服务后，点击账号“测试”重新确认。旧版已写入的异常不会被无条件洗成正常。鼠标悬停备注可查看完整错误；反馈请提供 HTTP 状态、版本与部署环境，**不要公开 Cookie、API Key 或带 key 的管理页链接**。
 
-裸机 Git 部署：`git pull --ff-only` 后重启对应服务；Docker Compose：`git pull --ff-only && docker compose up -d --build`。请先保存本地自定义修改，保留 `.env` 与 `data/`。
+裸机 Git 部署：`git pull --ff-only` 后重启对应服务；Docker Compose（拉取 Actions 预构建镜像）：`docker compose pull && docker compose up -d`；本地自行构建：`git pull --ff-only && docker compose -f docker-compose.local.yml up -d --build`。请先保存本地自定义修改，保留 `.env` 与 `data/`。
 
 不使用真实账号、不消耗生成额度的回归测试：
 

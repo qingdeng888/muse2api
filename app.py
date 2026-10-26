@@ -2129,8 +2129,9 @@ REPO_URL = "https://github.com/czg86389-hub/muse2api"
 TRACKED_REPO_PATHS = [
     "app.py", "engine.py", "store.py", "cdp.py", "config.py",
     "admin.html", "README.md", "version.json", "requirements.txt",
-    "Dockerfile", "docker-compose.yml", ".env.example", ".gitignore",
-    "LICENSE", "extension", "deploy", "tools",
+    "Dockerfile", "docker-compose.yml", "docker-compose.local.yml",
+    ".env.example", ".gitignore",
+    "LICENSE", "extension", "deploy", "tools", ".github",
 ]
 _UPDATE_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
 

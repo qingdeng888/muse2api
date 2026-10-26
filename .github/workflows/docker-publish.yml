@@ -1,0 +1,191 @@
+name: Build & Publish Docker Image
+
+# 触发时机：
+#   1. push 到 main / master —— 每次代码更新自动构建
+#   2. 打 tag（如 v1.6.3）—— 额外产出语义化版本标签
+#   3. 手动触发（Actions 页面 Run workflow）
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+# 同一分支/tag 只保留最新一次构建，避免旧提交的镜像覆盖新提交
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # GHCR 要求镜像名全小写；这里写死 muse2api，仓库改名也不影响
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/muse2api
+  PLATFORMS: linux/amd64,linux/arm64
+  # 与 smoke-test 里的 sha-<7位> 标签保持一致
+  DOCKER_METADATA_SHORT_SHA_LENGTH: 7
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 构建并推送镜像到 GitHub Container Registry (ghcr.io)
+  # ---------------------------------------------------------------------------
+  build-and-push:
+    name: Build & Push (ghcr.io)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          #   main 分支   -> latest + main + sha-<短SHA>
+          #   tag v1.6.3  -> 1.6.3 / 1.6 / v1.6.3 / latest
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=muse2api
+            org.opencontainers.image.description=OpenAI-compatible API for Muse.ai (chat / image / video) powered by headless Chromium CDP
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Set up QEMU (arm64 交叉构建)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ env.PLATFORMS }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 复用 BuildKit 缓存，二次构建通常 1~4 分钟
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      # 首次推送的 GHCR 包默认是 private，匿名 docker pull 会 403。
+      # 这里尽力改成 public；若权限不足（continue-on-error）请到
+      # https://github.com/users/<owner>/packages/container/muse2api/settings 手动设为 Public。
+      - name: Make package public (best effort)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sS -X PATCH \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/user/packages/container/muse2api" \
+            -d '{"visibility":"public"}' || true
+
+      - name: Write job summary
+        run: |
+          {
+            echo "### 🐳 镜像构建完成"
+            echo ""
+            echo "**Digest**: \`${{ steps.build.outputs.digest }}\`"
+            echo ""
+            echo "**架构**: \`${{ env.PLATFORMS }}\`"
+            echo ""
+            echo "**标签**:"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "服务器上更新（拉取新镜像）:"
+            echo '```bash'
+            echo "docker compose pull && docker compose up -d"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 2) 推送后冒烟测试：镜像能启动且 /healthz 返回 200
+  #    失败只告警、不阻断发布（镜像本身已经推送成功）
+  # ---------------------------------------------------------------------------
+  smoke-test:
+    name: Smoke Test (linux/amd64)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    timeout-minutes: 25
+    continue-on-error: true
+
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run container and probe /healthz
+        run: |
+          set -euo pipefail
+          # 与 metadata-action 的 type=sha,format=short 生成的标签保持一致（7 位）
+          IMAGE="${IMAGE_NAME}:sha-${GITHUB_SHA:0:7}"
+          echo "::group::docker pull ${IMAGE}"
+          docker pull --platform linux/amd64 "${IMAGE}"
+          echo "::endgroup::"
+
+          mkdir -p /tmp/muse2api-data
+          docker run -d --name muse2api-smoke \
+            -p 18610:18610 \
+            -e MUSE2API_KEY=m2a_smoke_test_key \
+            -e MUSE2API_HOST=0.0.0.0 \
+            -v /tmp/muse2api-data:/app/data \
+            --shm-size=1g \
+            "${IMAGE}"
+
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fsS --max-time 5 http://127.0.0.1:18610/healthz >/tmp/healthz.json 2>/dev/null; then
+              ok=1
+              break
+            fi
+            sleep 3
+          done
+
+          echo "::group::container logs (tail 60)"
+          docker logs --tail 60 muse2api-smoke || true
+          echo "::endgroup::"
+
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::/healthz 探测失败，容器未能正常启动"
+            exit 1
+          fi
+          echo "✅ /healthz => $(cat /tmp/healthz.json)"
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f muse2api-smoke || true
