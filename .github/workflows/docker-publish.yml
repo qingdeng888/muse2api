@@ -91,20 +91,27 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
-      # 首次推送的 GHCR 包默认是 private，匿名 docker pull 会 403。
-      # 这里尽力改成 public；若权限不足（continue-on-error）请到
-      # https://github.com/users/<owner>/packages/container/muse2api/settings 手动设为 Public。
-      - name: Make package public (best effort)
-        continue-on-error: true
+      # 检查包是否可匿名拉取。GITHUB_TOKEN 没有管理包可见性的权限，
+      # 这一步只做探测：首次推送的包默认是 private，需要人工到
+      # https://github.com/users/<owner>/packages/container/muse2api/settings 设为 Public。
+      - name: Check package visibility (anonymous pull)
+        continue-on-error: true   # 仅提示，不影响镜像发布
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: muse2api
         run: |
-          curl -sS -X PATCH \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/user/packages/container/muse2api" \
-            -d '{"visibility":"public"}' || true
+          TOKEN=$(curl -fsS "https://ghcr.io/token?scope=repository:${OWNER}/${PACKAGE}:pull&service=ghcr.io" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.oci.image.index.v1+json" \
+            "https://ghcr.io/v2/${OWNER}/${PACKAGE}/manifests/latest")
+          if [ "${CODE}" = "200" ]; then
+            echo "✅ ghcr.io/${OWNER}/${PACKAGE} 可匿名拉取（Public）"
+          else
+            echo "::warning::镜像已推送但匿名拉取返回 HTTP ${CODE}。请把包可见性设为 Public:" \
+                 "https://github.com/users/${OWNER}/packages/container/${PACKAGE}/settings"
+          fi
 
       - name: Write job summary
         run: |

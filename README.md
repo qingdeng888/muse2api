@@ -101,9 +101,10 @@ docker compose -f docker-compose.local.yml up -d --build
 
 两个 compose 文件同名服务、同端口，请勿同时启动；换用时先 `docker compose down`。
 
-> ⚠️ 镜像首次推送后，GHCR 包默认是私有（匿名 `docker compose pull` 会 403）。
-> 可到 `https://github.com/users/qingdeng888/packages/container/muse2api/settings`
-> 把可见性改为 **Public**；私有镜像则需先 `docker login ghcr.io -u <你的GitHub用户名>`（密码填 Personal Access Token，带 `read:packages` 权限）。
+> ℹ️ `ghcr.io/qingdeng888/muse2api` 是 **Public** 包，匿名即可 `docker compose pull`，无需登录。
+> 若你自己 fork 后重新构建，第一次推送的包默认是私有：到
+> `https://github.com/users/<你的用户名>/packages/container/muse2api/settings`
+> 把可见性改为 **Public**（或先执行 `docker login ghcr.io -u <用户名>`，密码填带 `read:packages` 的 PAT）。
 
 ---
 
