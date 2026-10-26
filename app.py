@@ -2125,7 +2125,13 @@ def get_keepalive_status(_=Depends(auth)):
 
 
 # ------------------------- 仓库实时更新检测、通知与一键在线升级 -------------------------
-REPO_URL = "https://github.com/czg86389-hub/muse2api"
+# 在线热升级指向本项目的 fork（镜像构建、check/upgrade 全部以这里为准）
+REPO_SLUG = "qingdeng888/muse2api"
+REPO_URL = f"https://github.com/{REPO_SLUG}"
+REPO_BRANCH = "main"
+# 一键推送时使用的提交者身份（可用 GITHUB_USER_NAME / GITHUB_USER_EMAIL 覆盖）
+GIT_AUTHOR_NAME = os.environ.get("GITHUB_USER_NAME", "qingdeng888")
+GIT_AUTHOR_EMAIL = os.environ.get("GITHUB_USER_EMAIL", "35051730+qingdeng888@users.noreply.github.com")
 TRACKED_REPO_PATHS = [
     "app.py", "engine.py", "store.py", "cdp.py", "config.py",
     "admin.html", "README.md", "version.json", "requirements.txt",
@@ -2183,9 +2189,9 @@ def _git(args: list[str], timeout: int = 30):
 
 
 def _ensure_git_repo(token: str = ""):
-    """确保 BASE_DIR 已初始化为绑定 czg86389-hub/muse2api 的 Git 仓库。"""
+    """确保 BASE_DIR 已初始化为绑定 REPO_SLUG 的 Git 仓库。"""
     git_dir = os.path.join(BASE_DIR, ".git")
-    remote_url = f"https://x-access-token:{token}@github.com/czg86389-hub/muse2api.git" if token else f"{REPO_URL}.git"
+    remote_url = f"https://x-access-token:{token}@github.com/{REPO_SLUG}.git" if token else f"{REPO_URL}.git"
     if not os.path.isdir(git_dir):
         _git(["init", "-b", "main"])
         _git(["remote", "add", "origin", remote_url])
@@ -2193,12 +2199,12 @@ def _ensure_git_repo(token: str = ""):
         _git(["reset", "--mixed", "origin/main"])
     else:
         _git(["remote", "set-url", "origin", remote_url])
-    _git(["config", "user.name", "czg86389-hub"])
-    _git(["config", "user.email", "czg86389-hub@users.noreply.github.com"])
+    _git(["config", "user.name", GIT_AUTHOR_NAME])
+    _git(["config", "user.email", GIT_AUTHOR_EMAIL])
 
 
 def _check_update_sync(force: bool = False) -> dict:
-    """检测 GitHub 官方仓库 (czg86389-hub/muse2api) 是否有新版本或新提交。
+    """检测 GitHub 仓库 (REPO_SLUG) 是否有新版本或新提交。
     默认缓存 90 秒，防止频繁刷新触发 GitHub API 速率限制。"""
     now = time.time()
     if not force and _UPDATE_CACHE["data"] and (now - _UPDATE_CACHE["ts"]) < 90:
@@ -2236,7 +2242,7 @@ def _check_update_sync(force: bool = False) -> dict:
     highlights_en = list(local_ver_obj.get("highlights_en") or [])
     try:
         rv = requests.get(
-            f"https://raw.githubusercontent.com/czg86389-hub/muse2api/main/version.json?t={int(now)}",
+            f"https://raw.githubusercontent.com/{REPO_SLUG}/{REPO_BRANCH}/version.json?t={int(now)}",
             timeout=6,
         )
         if rv.status_code == 200:
@@ -2258,7 +2264,7 @@ def _check_update_sync(force: bool = False) -> dict:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         resp = requests.get(
-            "https://api.github.com/repos/czg86389-hub/muse2api/commits?sha=main&per_page=5",
+            f"https://api.github.com/repos/{REPO_SLUG}/commits?sha={REPO_BRANCH}&per_page=5",
             headers=headers,
             timeout=6,
         )
@@ -2345,7 +2351,7 @@ def _upgrade_from_github_sync() -> dict:
 
     if not upgraded_via:
         resp = requests.get(
-            "https://codeload.github.com/czg86389-hub/muse2api/tar.gz/refs/heads/main",
+            f"https://codeload.github.com/{REPO_SLUG}/tar.gz/refs/heads/{REPO_BRANCH}",
             timeout=60,
         )
         if resp.status_code != 200:

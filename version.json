@@ -1,7 +1,7 @@
 {
   "version": "1.6.3",
   "updated_at": "2026-10-22",
-  "repo": "https://github.com/czg86389-hub/muse2api",
+  "repo": "https://github.com/qingdeng888/muse2api",
   "highlights": [
     "管理后台（admin.html）及 Chrome 扩展新增中英文国际化双语动态平滑切换，默认依据浏览器语言适配。",
     "放宽油猴脚本及后端必要 Cookie 校验至核心 Session 凭证（无需强制 hatch_gw），彻底解决导号误拦截问题。",

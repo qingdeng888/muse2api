@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Muse2API Cookie 导入助手
-// @namespace    https://github.com/czg86389-hub/muse2api
+// @namespace    https://github.com/qingdeng888/muse2api
 // @version      1.1.1
 // @description  在 muse.ai 网页上一键导出并推送核心 Cookie 至 muse2api 账号池，支持现代化悬浮面板、状态指示与剪贴板备份
 // @author       MUSE2API Contributors
 // @match        https://muse.ai/*
 // @match        https://*.muse.ai/*
-// @updateURL    https://raw.githubusercontent.com/czg86389-hub/muse2api/main/tools/muse2api_cookie_importer.user.js
-// @downloadURL  https://raw.githubusercontent.com/czg86389-hub/muse2api/main/tools/muse2api_cookie_importer.user.js
+// @updateURL    https://raw.githubusercontent.com/qingdeng888/muse2api/main/tools/muse2api_cookie_importer.user.js
+// @downloadURL  https://raw.githubusercontent.com/qingdeng888/muse2api/main/tools/muse2api_cookie_importer.user.js
 // @grant        GM_cookie
 // @grant        GM_setClipboard
 // @grant        GM_xmlhttpRequest

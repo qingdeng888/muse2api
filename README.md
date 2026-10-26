@@ -50,7 +50,7 @@
   - 无需手工 F12 抓包，点一下扩展图标即刻将当前浏览器登录态（含 `HttpOnly` 核心 Cookie 与真实过期时间）提取并安全推送至账号池。
 - 🖥️ **现代化深色运维面板（Web Console）与实时在线热升级**
   - 内置开箱即用的 Web UI，支持实时查看服务健康度、账号池额度与状态、一键全池保活、任务进度回放、媒体库管理与在线接口调试。
-  - **全网节点实时更新广播与一键升级**：当官方 GitHub 仓库发布新版本或修复时，所有已部署节点的管理后台顶部会自动弹出更新通知横幅，点击 **「⚡ 一键在线升级并重启」** 即可自动拉取最新代码并平滑重启（自动保留本地 `.env` 配置与账号数据）。
+  - **全网节点实时更新广播与一键升级**：当 `qingdeng888/muse2api` 仓库发布新版本或修复时，所有已部署节点的管理后台顶部会自动弹出更新通知横幅，点击 **「⚡ 一键在线升级并重启」** 即可自动拉取最新代码并平滑重启（自动保留本地 `.env` 配置与账号数据）。
 
 ---
 
@@ -161,7 +161,7 @@ docker compose -f docker-compose.local.yml up -d --build
 ### 方式 B：Tampermonkey 油猴脚本（跨浏览器免安装扩展）
 对于不想开启开发者模式或使用 Firefox / Safari 的用户，推荐直接使用油猴脚本一键安装：
 
-👉 **[⚡ 点击一键安装油猴脚本 (Raw UserJS)](https://raw.githubusercontent.com/czg86389-hub/muse2api/main/tools/muse2api_cookie_importer.user.js)**
+👉 **[⚡ 点击一键安装油猴脚本 (Raw UserJS)](https://raw.githubusercontent.com/qingdeng888/muse2api/main/tools/muse2api_cookie_importer.user.js)**
 
 1. 在浏览器安装 [Tampermonkey](https://www.tampermonkey.net/) 插件。
 2. 点击上方 **「⚡ 点击一键安装油猴脚本」** 链接，Tampermonkey 将自动弹出安装窗口，点击「安装」即可（无需手动复制粘贴代码）。
