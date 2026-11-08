@@ -244,9 +244,14 @@ table{width:100%;border-collapse:collapse;font-size:12.5px}
 #poolBody td.ellip{display:table-cell;white-space:normal;overflow-wrap:anywhere}
 .acts{display:flex;gap:6px;flex-wrap:wrap}
 .proxy-summary{max-width:180px;font-size:11px;color:var(--text2);margin-top:3px}
-#poolBody .proxy-summary{display:block;max-width:100%}
+#poolBody .proxy-summary{display:block;max-width:100%;overflow-wrap:anywhere}
 .empty{padding:26px 14px;text-align:center;color:var(--text3);font-size:12.5px}
 .row-dim td{opacity:.5}
+/* 中等宽度下收紧表格内边距：英文模式的行内操作按钮更长，避免横向溢出 */
+@media (max-width:1440px){
+  .table th{padding:10px 8px}
+  .table td{padding:9px 8px}
+}
 
 /* ---------- 徽章 / 状态 ---------- */
 .badge{
@@ -495,13 +500,14 @@ details.raw pre{margin-top:6px}
     <nav class="nav" id="nav">
       <button data-page="overview" class="active"><span class="nav-no">01</span><span class="nav-ic">◈</span>总览</button>
       <button data-page="accounts"><span class="nav-no">02</span><span class="nav-ic">◍</span>账号池</button>
-      <button data-page="cookie"><span class="nav-no">03</span><span class="nav-ic">🍪</span>获取 Cookie</button>
-      <button data-page="tasks"><span class="nav-no">04</span><span class="nav-ic">▤</span>任务记录</button>
-      <button data-page="media"><span class="nav-no">05</span><span class="nav-ic">▣</span>媒体库</button>
-      <button data-page="play"><span class="nav-no">06</span><span class="nav-ic">▷</span>接口测试</button>
-      <button data-page="docs"><span class="nav-no">07</span><span class="nav-ic">❐</span>接入文档</button>
-      <button data-page="update"><span class="nav-no">08</span><span class="nav-ic">↻</span>更新中心</button>
-      <button data-page="settings"><span class="nav-no">09</span><span class="nav-ic">⚙</span>设置</button>
+      <button data-page="proxies"><span class="nav-no">03</span><span class="nav-ic">⇄</span>代理池</button>
+      <button data-page="cookie"><span class="nav-no">04</span><span class="nav-ic">🍪</span>获取 Cookie</button>
+      <button data-page="tasks"><span class="nav-no">05</span><span class="nav-ic">▤</span>任务记录</button>
+      <button data-page="media"><span class="nav-no">06</span><span class="nav-ic">▣</span>媒体库</button>
+      <button data-page="play"><span class="nav-no">07</span><span class="nav-ic">▷</span>接口测试</button>
+      <button data-page="docs"><span class="nav-no">08</span><span class="nav-ic">❐</span>接入文档</button>
+      <button data-page="update"><span class="nav-no">09</span><span class="nav-ic">↻</span>更新中心</button>
+      <button data-page="settings"><span class="nav-no">10</span><span class="nav-ic">⚙</span>设置</button>
     </nav>
     <div class="sidebar-foot">
       <div class="side-row">
@@ -628,7 +634,46 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 03 获取 Cookie ==================== -->
+    <!-- ==================== 03 代理池 ==================== -->
+    <section class="page hidden" id="page-proxies">
+      <div class="metric-grid">
+        <div class="metric-card"><div class="metric-label"><i></i>代理总数</div><div class="metric" id="pxTotal">—</div><div class="metric-foot">池内全部代理</div></div>
+        <div class="metric-card"><div class="metric-label"><i class="ok"></i>健康</div><div class="metric" id="pxOk">—</div><div class="metric-foot">出口探测通过</div></div>
+        <div class="metric-card"><div class="metric-label"><i class="bad"></i>异常</div><div class="metric" id="pxBad">—</div><div class="metric-foot">探测失败（自动避让）</div></div>
+        <div class="metric-card"><div class="metric-label"><i class="warn"></i>绑定账号</div><div class="metric" id="pxBound">—</div><div class="metric-foot">固定绑定模式的账号数</div></div>
+      </div>
+      <div class="section">
+        <div class="section-head"><h3>添加代理</h3><span class="spacer"></span>
+          <button class="primary" type="button" id="btnPxSweep" onclick="sweepProxyHealth(this)">🔍 一键检测全部</button>
+        </div>
+        <p class="hint" data-i18n="pool-add-hint">
+          支持 <code>http</code> / <code>socks5</code> / <code>socks5h</code>，可直接粘贴含认证的完整链接
+          （如 <code>socks5://user:pass@proxy.example.com:1080</code>）。多行批量导入，<code>#</code> 开头为注释，自动去重。
+        </p>
+        <div class="field"><label>代理链接（单条或多行批量）</label>
+          <textarea class="inp" id="pxNew" style="min-height:72px" placeholder="socks5://user:pass@proxy.example.com:1080" spellcheck="false"></textarea>
+        </div>
+        <button class="primary" type="button" onclick="addProxies()">+ 添加到代理池</button>
+      </div>
+      <div class="section">
+        <div class="section-head"><h3>代理列表</h3><span class="tag" id="pxCount">0</span><span class="spacer"></span>
+          <button class="ghost" type="button" onclick="refreshProxyPage()">↻ 刷新</button>
+        </div>
+        <p class="hint" data-i18n="pool-list-hint">
+          账号<b>指定绑定</b>某个代理后，它与 muse 上游的所有通信（浏览器、会话检测、保活）都走该代理；
+          遇错自动转移到池内健康代理、恢复后自动<b>回切</b>。<b>轮询</b>模式每次任务自动选用下一个健康代理；
+          删除已被绑定的代理时，其账号会自动转为轮询。
+        </p>
+        <div class="tblwrap"><table class="table">
+          <thead><tr>
+            <th>代理地址</th><th>状态</th><th>延迟</th><th>出口 IP</th><th>最近检测</th><th>绑定</th><th>启用</th><th>操作</th>
+          </tr></thead>
+          <tbody id="pxBody"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ==================== 04 获取 Cookie ==================== -->
     <section class="page hidden" id="page-cookie">
       <div class="notice" id="extensionUpgradeNotice" role="note" data-i18n="extension-upgrade-notice"><span class="ic">⬆️</span><div class="nbody"><b>重要：请手动升级浏览器插件至 1.0.2</b><br>更新服务不会自动升级已加载的扩展。下载新包，替换原扩展目录文件，再到 <code>chrome://extensions</code> 或 <code>edge://extensions</code> 点击“重新加载”。不同浏览器个人资料需分别升级。<br><a href="https://github.com/czg86389-hub/muse2api/releases/download/v1.6.9/muse2api-chrome-extension-v1.6.9.zip">下载扩展 1.0.2</a>；油猴用户请升级脚本至 1.1.2。</div></div>
 
@@ -727,7 +772,7 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 04 任务记录 ==================== -->
+    <!-- ==================== 05 任务记录 ==================== -->
     <section class="page hidden" id="page-tasks">
       <div class="section">
         <div class="section-head"><h3>任务记录</h3><span class="tag" id="taskCount">0</span><span class="spacer"></span>
@@ -742,7 +787,7 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 05 媒体库 ==================== -->
+    <!-- ==================== 06 媒体库 ==================== -->
     <section class="page hidden" id="page-media">
       <div class="section">
         <div class="section-head"><h3>媒体库</h3><span class="tag" id="mediaCount">0</span><span class="spacer"></span>
@@ -754,7 +799,7 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 06 接口测试 ==================== -->
+    <!-- ==================== 07 接口测试 ==================== -->
     <section class="page hidden" id="page-play">
       <div class="section">
         <div class="section-head">
@@ -824,7 +869,7 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 07 接入文档 ==================== -->
+    <!-- ==================== 08 接入文档 ==================== -->
     <section class="page hidden" id="page-docs">
       <div class="section">
         <div class="section-head"><h3>接入说明</h3><span class="spacer"></span><span class="eyebrow">openai compatible</span></div>
@@ -925,7 +970,7 @@ for chunk in resp:
       </div>
     </section>
 
-    <!-- ==================== 08 更新中心 ==================== -->
+    <!-- ==================== 09 更新中心 ==================== -->
     <section class="page hidden" id="page-update">
       <div class="section">
         <div class="section-head"><h3>官方仓库版本检测与在线热升级</h3>
@@ -943,7 +988,7 @@ for chunk in resp:
       </div>
     </section>
 
-    <!-- ==================== 09 设置 ==================== -->
+    <!-- ==================== 10 设置 ==================== -->
     <section class="page hidden" id="page-settings">
       <div class="split">
         <div class="section">
@@ -986,34 +1031,29 @@ for chunk in resp:
   </main>
 </div>
 
-<!-- ==================== 代理配置弹窗 ==================== -->
+<!-- ==================== 代理配置弹窗（模式：直连 / 轮询 / 指定池内代理） ==================== -->
 <dialog id="proxyDialog" class="proxy-dialog" aria-labelledby="proxyTitle" aria-describedby="proxyHelp">
   <form id="proxyForm">
     <h2 id="proxyTitle">账号代理</h2>
-    <p class="hint" id="proxyHelp">该账号的浏览器、会话检测与保活使用同一代理。代理失败会报告错误，不会自动直连。</p>
-    <label for="proxyMode">连接方式</label>
-    <select id="proxyMode">
-      <option value="default">默认网络</option>
-      <option value="proxy">指定代理</option>
+    <p class="hint" id="proxyHelp" data-i18n="proxy-help">绑定后，该账号与 muse 上游的所有通信（浏览器、会话检测、保活）都走所选代理。指定代理遇错自动转移到池内健康代理，恢复后自动回切；代理故障绝不静默直连。</p>
+    <label for="proxyMode">代理模式</label>
+    <select id="proxyMode" data-no-i18n>
+      <option value="direct">默认直连（不走代理）</option>
+      <option value="rotate">轮询代理池（每次任务自动选健康代理）</option>
+      <option value="bind">指定池内代理（固定绑定，支持故障转移）</option>
     </select>
-    <div id="proxyFields">
-      <label for="proxyServer">代理地址或完整链接</label>
-      <input id="proxyServer" type="text" placeholder="socks5://user:password@proxy.example.com:1080" autocomplete="off" spellcheck="false">
-      <p class="hint">可直接粘贴包含用户名和密码的 HTTP、SOCKS5 或 SOCKS5h 链接，立即测试，无需先保存。</p>
-      <details class="proxy-auth"><summary>手动填写认证信息（可选）</summary>
-      <label for="proxyUsername">代理用户名（可选）</label>
-      <input id="proxyUsername" type="text" autocomplete="off" spellcheck="false">
-      <label for="proxyPassword">代理密码</label>
-      <input id="proxyPassword" type="password" autocomplete="new-password" aria-describedby="proxyPasswordHelp">
-      <p class="hint" id="proxyPasswordHelp">密码不会回显。地址与用户名不变时，留空保留已保存密码；修改地址或用户名后请重新输入密码。</p>
-      </details>
+    <div id="proxyBindFields" hidden>
+      <label for="proxySelect">选择池内代理</label>
+      <select id="proxySelect" data-no-i18n></select>
+      <p class="hint"><span id="proxyBindMeta"></span><span data-i18n="pool-empty-hint">没有合适的代理？先到「代理池」页添加并启用。</span></p>
     </div>
-    <p class="hint">账号正在执行任务时，请稍后再修改代理。保存后，下次请求使用新设置。</p>
+    <p class="hint" id="proxyRotateHint" hidden data-i18n="proxy-rotate-hint">每次生成任务从池中取下一个健康代理；全部不健康时任务失败可见，绝不静默直连。</p>
+    <p class="hint" data-i18n="proxy-busy-hint">账号正在执行任务时，请稍后再修改代理。保存后，下一次请求使用新设置。</p>
     <div id="proxyError" role="alert"></div>
     <div id="proxyResult" class="hint" role="status" aria-live="polite" style="white-space:pre-line;overflow-wrap:anywhere"></div>
     <div class="proxy-actions">
       <button type="button" class="ghost" id="proxyTest">测试连通性</button>
-      <button type="button" class="danger" id="proxyRemove">移除代理</button>
+      <button type="button" class="danger" id="proxyRemove">改为直连</button>
       <button type="button" class="ghost" onclick="$('proxyDialog').close()">取消</button>
       <button type="submit" class="primary" id="proxySave">保存</button>
     </div>
@@ -1629,6 +1669,33 @@ Object.assign(I18N_EN, {
   "静默刷新会话令牌与有效期": "Silently refresh the session token and expiry",
   "缺少核心 cookie，无法生成": "Missing core cookies; cannot generate",
   "默认网络（未配置代理）": "Default network (no proxy)",
+  /* ---- 代理池 ---- */
+  "代理池": "Proxy Pool", "集中管理代理：账号绑定、轮询与故障转移": "Centralized proxies: per-account binding, rotation and failover",
+  "代理总数": "Total proxies", "绑定账号": "Bound accounts", "池内全部代理": "All proxies in the pool",
+  "出口探测通过": "Egress probe passed", "探测失败（自动避让）": "Probe failed (auto-avoided)", "固定绑定模式的账号数": "Accounts in pinned (bind) mode",
+  "添加代理": "Add proxies", "代理链接（单条或多行批量）": "Proxy URLs (single or multiple lines)",
+  "+ 添加到代理池": "+ Add to pool", "🔍 一键检测全部": "🔍 Check all now", "检测中…": "Checking…",
+  "代理列表": "Proxy list",
+  "代理地址": "Proxy", "状态": "Status", "延迟": "Latency", "出口 IP": "Egress IP", "最近检测": "Last check", "启用": "Enable",
+  "健康": "Healthy", "异常": "Error", "已停用": "Disabled", "停用": "Disable",
+  "用户": "User", "测试": "Test",
+  "代理池为空。在上方粘贴代理链接即可添加": "The pool is empty. Paste proxy URLs above to add some",
+  "请先粘贴代理链接": "Paste a proxy URL first",
+  "代理已添加": "Proxy added", "该代理已存在": "This proxy already exists",
+  "正在探测代理出口…": "Probing the proxy egress…",
+  "请先在「代理池」页添加并启用代理": "Add and enable proxies on the \"Proxy Pool\" page first",
+  "已切换为默认直连": "Switched to direct connection",
+  "已切换为轮询代理池": "Switched to pool rotation",
+  "代理绑定已保存，下次请求生效": "Proxy binding saved; takes effect on the next request",
+  "已停用（绑定的账号将自动避开）": "Disabled (bound accounts will avoid it automatically)",
+  "已删除，X 个账号已自动转为轮询": "Deleted; X bound account(s) switched to rotation automatically",
+  "已删除": "Deleted",
+  "正在逐个探测池内代理出口…": "Probing every proxy egress in the pool…",
+  "正在通过当前所选代理检测出口与 Muse 会话…": "Checking egress and Muse session through the selected proxy…",
+  "绑定代理暂不可用，已自动转移到池内健康代理，恢复后自动回切": "The pinned proxy is unavailable; traffic moved to a healthy pool proxy and will return automatically once it recovers",
+  "直连": "Direct", "轮询": "Rotate", "指定": "Pinned", "自定义": "Custom", "已转移": "Moved",
+  "当前状态：健康": "Current status: healthy", "当前状态：异常（将自动转移到其他健康代理）。": "Current status: error (traffic will move to another healthy proxy automatically).",
+  "（代理池为空，请先到「代理池」页添加）": "(pool is empty; add proxies on the \"Proxy Pool\" page first)",
 });
 
 /* 含富文本的块：data-i18n="key" → 英文 innerHTML（须保留原有子元素的 id/class/属性） */
@@ -1658,6 +1725,13 @@ const I18N_EN_HTML = {
   "auth-hint": "Except for <code>/healthz</code>, <code>/readyz</code> and <code>/v1/media/*</code>, all endpoints require <code>Authorization: Bearer &lt;API Key&gt;</code>. The API Key is configured in <code>MUSE2API_KEY</code> in the server's <code>.env</code>.",
   "tool-calls-hint": "<b>About the \"tool calling\" limitation (important, tested):</b><br>The muse.ai web assistant has an explicit alignment policy that refuses to \"output fake tool-call JSON\". Its actual reply in testing was \"I won't output 'fake tool calls' in this JSON format — I don't have a get_weather tool.\" Three prompt protocols with different wording and placement were tried, and all failed.<br>So: <b>autonomous agent modes</b> that depend on <code>tool_calls</code> (reading/writing files, running commands, etc.) can't be supported; but all <b>Q&amp;A-style</b> usage (chat, coding, explaining, translating, summarizing, images, videos) <b>works fully</b>.<br>If a client sends a <code>tools</code> field anyway, the API won't error: it ignores the tool declarations and answers as a normal chat.",
   "repo-commits-head": "Latest commits:",
+  /* ---- 代理池 ---- */
+  "pool-add-hint": "Supports <code>http</code> / <code>socks5</code> / <code>socks5h</code>. Paste a full URL including credentials (e.g. <code>socks5://user:pass@proxy.example.com:1080</code>). Multiple lines import as a batch; <code>#</code> starts a comment; duplicates are skipped.",
+  "pool-list-hint": "After an account <b>pins</b> a proxy, all of its traffic to muse upstream (browser, session checks, keep-alive) goes through it. On errors it moves to a healthy pool proxy automatically and <b>returns home</b> once the pinned proxy recovers. <b>Rotate</b> mode picks the next healthy proxy for every task. Deleting a bound proxy switches its accounts to rotation automatically.",
+  "proxy-help": "Once bound, all of this account's traffic to muse upstream (browser, session checks, keep-alive) goes through the selected proxy. A pinned proxy that fails moves to a healthy pool proxy automatically and returns home on recovery; a broken proxy never silently falls back to a direct connection.",
+  "proxy-rotate-hint": "Every generation task picks the next healthy proxy from the pool. If every proxy is unhealthy the task fails visibly — never a silent direct connection.",
+  "proxy-busy-hint": "Do not change the proxy while the account is running a task. The new setting applies from the next request.",
+  "pool-empty-hint": "No suitable proxy? Add and enable some on the \"Proxy Pool\" page first.",
 };
 /* 含变量的文案：[正则源码, 替换串]，按顺序匹配整段文本（移植自旧版，服务端消息不变） */
 const I18N_EN_PATTERNS = ([
@@ -1742,6 +1816,26 @@ const I18N_EN_PATTERNS = ([
   ["会话有效 · 自动保活 \\(VM: (.*?)\\)", "Session valid · auto keep-alive (VM: $1)"],
   ["代理已连通 · 上次检测通过", "Proxy reachable · last check passed"],
   ["代理未测试 · 等待首次检测", "Proxy untested · waiting for the first check"],
+  /* ---- 代理池 ---- */
+  ["代理池为空：请先在「代理池」页添加并启用代理", "The proxy pool is empty: add and enable proxies on the \"Proxy Pool\" page first"],
+  ["代理池没有可用代理：请先在「代理池」页添加并启用代理", "No usable proxy in the pool: add and enable proxies on the \"Proxy Pool\" page first"],
+  ["原绑定代理已删除，已自动切换为轮询代理池", "The pinned proxy was deleted; this account switched to pool rotation automatically"],
+  ["代理绑定已更新，请重新测试", "Proxy binding updated; test it again"],
+  ["已切换为轮询代理池：每个任务自动选用健康代理", "Switched to pool rotation: every task picks a healthy proxy automatically"],
+  ["已切换为默认直连", "Switched to direct connection"],
+  ["代理不存在或已删除，请刷新代理池", "The proxy does not exist or was deleted; refresh the proxy pool"],
+  ["请填写代理链接，例如 socks5://user:pass@host:1080", "Enter a proxy URL, e.g. socks5://user:pass@host:1080"],
+  ["请粘贴代理列表（每行一个）", "Paste a proxy list (one per line)"],
+  ["代理已停用，请先启用再测试", "The proxy is disabled; enable it before testing"],
+  ["该代理正在检测中，请稍候", "This proxy is being checked; try again shortly"],
+  ["代理出口检测未成功 \\(HTTP (\\d+)\\)", "Proxy egress check failed (HTTP $1)"],
+  ["代理链接无效：(.*)", "Invalid proxy URL: $1"],
+  ["已添加 (\\d+) 个代理，跳过重复 (\\d+) 个", "Added $1 prox(y|ies), skipped $2 duplicate(s)"],
+  ["已添加 (\\d+) 个代理，跳过重复 (\\d+) 个，失败 (\\d+) 条", "Added $1 prox(y|ies), skipped $2 duplicate(s), $3 failed"],
+  ["检测完成：(\\d+) 个健康，(\\d+) 个异常", "Check finished: $1 healthy, $2 error"],
+  ["检测完成：(\\d+) 个健康", "Check finished: $1 healthy"],
+  ["✓ 出口 (.*) · (\\d+) ms", "✓ Egress $1 · $2 ms"],
+  ["代理出口检测失败：(.*)", "Proxy egress check failed: $1"],
   ["任务异常: (.*)", "Task error: $1"],
   ["生成失败: (.*)", "Generation failed: $1"],
   ["助手超时: (.*)", "Assistant timeout: $1"],
@@ -1993,13 +2087,14 @@ $('logout').onclick = () => {
 const PAGES = {
   overview: ['01', '总览', '服务运行状态与关键指标'],
   accounts: ['02', '账号池', '账号池管理：导入、测试、代理与保活'],
-  cookie:   ['03', '获取 Cookie', '三种导入方式与 Cookie 有效期说明'],
-  tasks:    ['04', '任务记录', '生成任务历史与结果'],
-  media:    ['05', '媒体库', '生成的图片与视频，支持批量管理'],
-  play:     ['06', '接口测试', '对话 / 图片 / 视频在线测试'],
-  docs:     ['07', '接入文档', 'BASE URL、模型与调用示例'],
-  update:   ['08', '更新中心', '版本检测与一键在线升级'],
-  settings: ['09', '设置', '密钥、主题、语言与服务配置'],
+  proxies:  ['03', '代理池', '集中管理代理：账号绑定、轮询与故障转移'],
+  cookie:   ['04', '获取 Cookie', '三种导入方式与 Cookie 有效期说明'],
+  tasks:    ['05', '任务记录', '生成任务历史与结果'],
+  media:    ['06', '媒体库', '生成的图片与视频，支持批量管理'],
+  play:     ['07', '接口测试', '对话 / 图片 / 视频在线测试'],
+  docs:     ['08', '接入文档', 'BASE URL、模型与调用示例'],
+  update:   ['09', '更新中心', '版本检测与一键在线升级'],
+  settings: ['10', '设置', '密钥、主题、语言与服务配置'],
 };
 let currentPage = 'overview';
 
@@ -2016,6 +2111,7 @@ function openPage(page){
   // 页面级懒加载
   if (page === 'tasks') loadTasks();
   if (page === 'media') loadMedia();
+  if (page === 'proxies') refreshProxyPage();
   if (page === 'update') loadRepoStatus(false);
   if (page === 'settings') loadSettings();
   if (page === 'cookie'){ fillCmd(); loadExtFiles(); }
@@ -2027,6 +2123,7 @@ $('refresh-now').onclick = () => {
   refreshAll();
   if (currentPage === 'tasks') loadTasks();
   if (currentPage === 'media') loadMedia();
+  if (currentPage === 'proxies') refreshProxyPage();
   if (currentPage === 'update') loadRepoStatus(true);
   toast('已刷新', 'ok');
 };
@@ -2301,8 +2398,16 @@ async function loadPool(){
                   : ok === false ? `<span class="badge bad">${esc(t('● 异常'))}</span>`
                   : `<span class="badge warn">${esc(t('○ 未检测'))}</span>`;
       const miss = a.essential_ok ? '' : ` <span class="badge bad" title="${esc(t('缺少核心 cookie，无法生成'))}">${esc(t('缺核心'))}</span>`;
+      const modeBadge = a.proxy_mode === 'rotate' ? `<span class="badge info">${esc(t('轮询'))}</span>`
+                      : a.proxy_mode === 'bind' ? `<span class="badge info">${esc(t('指定'))}</span>`
+                      : a.proxy && a.proxy.server ? `<span class="badge info">${esc(t('自定义'))}</span>`
+                      : `<span class="badge mute">${esc(t('直连'))}</span>`;
+      const pserver = a.proxy_mode === 'bind' ? (a.proxy_server || '—')
+                    : (a.proxy && a.proxy.server) ? a.proxy.server : '';
+      const failoverTag = a.proxy_failover
+        ? ` <span class="badge warn" title="${esc(t('绑定代理暂不可用，已自动转移到池内健康代理，恢复后自动回切'))}">${esc(t('已转移'))}</span>` : '';
       return `<tr>
-        <td><b>${esc(a.label)}</b><div class="mono proxy-summary" title="${esc(a.proxy?.server || t('默认网络（未配置代理）'))}">${esc(a.proxy?.server || t('默认网络（未配置代理）'))}</div>${proxyStatus(a)}</td>
+        <td><b>${esc(a.label)}</b><div style="margin-top:3px">${modeBadge}${failoverTag}</div><div class="mono proxy-summary" title="${esc(pserver || t('默认直连'))}">${esc(pserver || t('默认直连'))}</div>${proxyStatus(a)}</td>
         <td class="mono">${esc(a.id)}</td>
         <td>${badge}${miss}</td>
         <td>${expiryBadge(a)}</td>
@@ -2356,40 +2461,189 @@ async function testAcc(id){
   }catch(e){ toast('测试失败：' + e.message, 'bad'); }
 }
 
-/* ================= 代理弹窗（先测后存状态机） ================= */
+/* ================= 代理池（页面数据 + 弹窗状态机） ================= */
+let poolRows = [];
+let poolLoadedAt = 0;
+
+async function loadProxies(force){
+  const now = Date.now();
+  if (!force && poolRows.length && now - poolLoadedAt < 15000) return poolRows;
+  try{
+    const d = await api('/admin/proxies');
+    poolRows = d.proxies || [];
+    poolLoadedAt = now;
+  }catch(e){ /* 未登录等场景静默 */ }
+  return poolRows;
+}
+
+async function refreshProxyPage(){
+  await loadProxies(true);
+  renderProxyPage();
+}
+
+function renderProxyPage(){
+  if (!$('pxBody')) return;
+  const rows = poolRows;
+  const okCount = rows.filter(p => p.enabled && p.healthy).length;
+  const badCount = rows.filter(p => p.enabled && !p.healthy).length;
+  const boundCount = rows.reduce((s, p) => s + (p.bindings || 0), 0);
+  const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  set('pxTotal', rows.length);
+  set('pxOk', okCount);
+  set('pxBad', badCount);
+  set('pxBound', boundCount);
+  set('pxCount', rows.length);
+  if (!rows.length){
+    $('pxBody').innerHTML = `<tr><td colspan="8" class="empty">${esc(t('代理池为空。在上方粘贴代理链接即可添加'))}</td></tr>`;
+    return;
+  }
+  $('pxBody').innerHTML = rows.map(p => {
+    const badge = !p.enabled ? `<span class="badge mute">${esc(t('已停用'))}</span>`
+      : p.healthy ? `<span class="badge ok">${esc(t('健康'))}</span>`
+      : `<span class="badge bad" title="${esc(p.last_error || '')}">${esc(t('异常'))}</span>`;
+    const latency = p.latency_ms != null ? p.latency_ms + ' ms' : '—';
+    const exit = p.exit_ip ? `<span class="mono">${esc(p.exit_ip)}</span>` : '—';
+    const checked = p.last_check ? esc(t(ago(p.last_check))) : '—';
+    const bind = p.bindings ? `<span class="badge info">${p.bindings}</span>` : '<span class="badge mute">0</span>';
+    const srv = p.label ? `<b>${esc(p.label)}</b><div class="mono proxy-summary">${esc(p.server)}</div>`
+                        : `<b class="mono" style="font-size:12px">${esc(p.server)}</b>`;
+    const user = p.username ? `<div class="sub-line">${esc(t('用户'))}: ${esc(p.username)}${p.has_password ? ' / ***' : ''}</div>` : '';
+    return `<tr>
+      <td>${srv}${user}</td>
+      <td>${badge}</td>
+      <td class="mono">${latency}</td>
+      <td>${exit}</td>
+      <td class="mono">${checked}</td>
+      <td>${bind}</td>
+      <td>${p.enabled ? `<span class="badge ok">${esc(t('开'))}</span>` : `<span class="badge mute">${esc(t('关'))}</span>`}</td>
+      <td><div class="acts">
+        <button class="ghost mini" onclick="testProxyRow('${p.id}', this)">${esc(t('测试'))}</button>
+        <button class="ghost mini" onclick="toggleProxy('${p.id}', ${!p.enabled})">${esc(p.enabled ? t('停用') : t('启用'))}</button>
+        <button class="danger mini" onclick="delProxy('${p.id}', ${p.bindings || 0})">${esc(t('删除'))}</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+async function addProxies(){
+  const el = $('pxNew');
+  const raw = el.value.trim();
+  if (!raw) return toast('请先粘贴代理链接', 'warn');
+  const lines = raw.split('\n').map(s => s.trim()).filter(Boolean);
+  try{
+    let r;
+    if (lines.length > 1){
+      r = await api('/admin/proxies/bulk', {method:'POST', body: JSON.stringify({text: raw})});
+      const errs = (r.errors || []).length ? `，失败 ${(r.errors||[]).length} 条` : '';
+      toast(`已添加 ${r.added} 个代理，跳过重复 ${r.skipped} 个${errs}`, r.added ? 'ok' : 'warn');
+      if ((r.errors || []).length) console.warn('proxy bulk errors:', r.errors);
+    }else{
+      r = await api('/admin/proxies', {method:'POST', body: JSON.stringify({value: raw})});
+      toast(r.created ? '代理已添加' : '该代理已存在', r.created ? 'ok' : 'warn');
+    }
+    el.value = '';
+    poolRows = r.proxies || []; poolLoadedAt = Date.now();
+    renderProxyPage();
+  }catch(e){ toast('添加失败：' + e.message, 'bad'); }
+}
+
+async function testProxyRow(pid, btn){
+  if (btn){ btn.disabled = true; }
+  toast('正在探测代理出口…');
+  try{
+    const r = await api(`/admin/proxies/${pid}/test`, {method:'POST'});
+    if (r.ok) toast(`✓ 出口 ${r.exit_ip} · ${r.latency_ms} ms`, 'ok');
+    else toast('✗ ' + (r.error || '检测失败'), 'bad');
+  }catch(e){ toast('检测失败：' + e.message, 'bad'); }
+  finally{ await loadProxies(true); renderProxyPage(); }
+}
+
+async function toggleProxy(pid, enabled){
+  try{
+    const r = await api(`/admin/proxies/${pid}`, {method:'PATCH', body: JSON.stringify({enabled})});
+    poolRows = r.proxies || []; poolLoadedAt = Date.now();
+    toast(enabled ? '已启用' : '已停用（绑定的账号将自动避开）', 'ok');
+    renderProxyPage(); loadPool();
+  }catch(e){ toast('操作失败：' + e.message, 'bad'); }
+}
+
+async function delProxy(pid, bindings){
+  const tip = bindings
+    ? `确定删除该代理？${bindings} 个绑定它的账号将自动切换为「轮询代理池」。`
+    : '确定删除该代理？';
+  if (!confirm(tip)) return;
+  try{
+    const r = await api(`/admin/proxies/${pid}`, {method:'DELETE'});
+    poolRows = r.proxies || []; poolLoadedAt = Date.now();
+    toast(r.migrated ? `已删除，${r.migrated} 个账号已自动转为轮询` : '已删除', 'ok');
+    renderProxyPage(); loadPool();
+  }catch(e){ toast('删除失败：' + e.message, 'bad'); }
+}
+
+async function sweepProxyHealth(btn){
+  if (btn){ btn.disabled = true; btn.innerHTML = `<span class="loading"></span> ${esc(t('检测中…'))}`; }
+  toast('正在逐个探测池内代理出口…', 'warn');
+  try{
+    const r = await api('/admin/proxies/health-check', {method:'POST'});
+    const okN = (r.results || []).filter(x => x.ok).length;
+    const badN = (r.checked || 0) - okN;
+    toast(`检测完成：${okN} 个健康${badN ? `，${badN} 个异常` : ''}`, badN ? 'warn' : 'ok');
+    poolRows = r.proxies || []; poolLoadedAt = Date.now();
+    renderProxyPage(); loadPool();
+  }catch(e){ toast('检测失败：' + e.message, 'bad'); }
+  finally{
+    if (btn){ btn.disabled = false; btn.textContent = t('🔍 一键检测全部'); }
+  }
+}
+
+/* --- 弹窗状态机：direct / rotate / bind --- */
 let proxyAccountId = null;
 let proxyBusy = false;
 function updateProxyMode(){
-  const enabled = $('proxyMode').value === 'proxy';
-  $('proxyFields').hidden = !enabled;
-  for (const id of ['proxyServer', 'proxyUsername', 'proxyPassword']) $(id).disabled = !enabled || proxyBusy;
-  $('proxyServer').required = enabled;
+  const mode = $('proxyMode').value;
+  $('proxyBindFields').hidden = mode !== 'bind';
+  $('proxyRotateHint').hidden = mode !== 'rotate';
   $('proxyMode').disabled = proxyBusy;
+  $('proxySelect').disabled = proxyBusy || mode !== 'bind';
   $('proxySave').disabled = proxyBusy;
-  const saved = accounts.find(a => a.id === proxyAccountId)?.proxy;
-  $('proxyRemove').disabled = proxyBusy || !saved;
-  $('proxyTest').disabled = proxyBusy || !enabled || !$('proxyServer').value.trim();
+  $('proxyRemove').disabled = proxyBusy || mode === 'direct';
+  $('proxyTest').disabled = proxyBusy || mode === 'direct'
+    || (mode === 'bind' && !$('proxySelect').value);
+  const sel = poolRows.find(p => p.id === $('proxySelect').value);
+  const meta = $('proxyBindMeta');
+  if (meta) meta.textContent = sel
+    ? (sel.healthy ? `当前状态：健康${sel.exit_ip ? ' · 出口 ' + sel.exit_ip : ''}。` : `当前状态：异常（将自动转移到其他健康代理）。`)
+    : '';
 }
-function proxyHasChanges(){
-  const saved = accounts.find(a => a.id === proxyAccountId)?.proxy;
-  if ($('proxyMode').value !== (saved ? 'proxy' : 'default')) return true;
-  return !!saved && ($('proxyServer').value.trim() !== saved.server
-    || $('proxyUsername').value !== (saved.username || '') || !!$('proxyPassword').value);
+function fillProxySelect(selectedId){
+  const sel = $('proxySelect');
+  const usable = poolRows.filter(p => p.enabled);
+  sel.innerHTML = usable.length
+    ? usable.map(p => `<option value="${esc(p.id)}">${esc(p.label || p.server)}${p.healthy ? '' : ' ⚠'}</option>`).join('')
+    : `<option value="">${esc(t('（代理池为空，请先到「代理池」页添加）'))}</option>`;
+  if (selectedId && usable.some(p => p.id === selectedId)) sel.value = selectedId;
 }
-function openProxy(id){
+async function openProxy(id){
   const account = accounts.find(a => a.id === id);
   if (!account) return;
   proxyAccountId = id;
   proxyBusy = false;
-  $('proxyForm').reset();
-  $('proxyMode').value = account.proxy ? 'proxy' : 'default';
-  $('proxyServer').value = account.proxy?.server || '';
-  $('proxyUsername').value = account.proxy?.username || '';
   $('proxyError').textContent = '';
   $('proxyResult').textContent = '';
+  await loadProxies(false);
+  let mode = account.proxy_mode || '';
+  if (!mode && account.proxy && account.proxy.server) mode = 'bind';   // 旧版单账号代理视作绑定
+  if (!mode) mode = 'direct';
+  fillProxySelect(account.proxy_id || '');
+  if (!account.proxy_id && account.proxy && account.proxy.server){
+    const legacy = poolRows.find(p => p.server === account.proxy.server
+      && (p.username || '') === (account.proxy.username || ''));
+    if (legacy) $('proxySelect').value = legacy.id;
+  }
+  $('proxyMode').value = mode;
   updateProxyMode();
   $('proxyDialog').showModal();
-  $(account.proxy ? 'proxyServer' : 'proxyMode').focus();
+  $('proxyMode').focus();
 }
 $('proxyDialog').addEventListener('close', () => {
   $('proxyForm').reset();
@@ -2397,7 +2651,7 @@ $('proxyDialog').addEventListener('close', () => {
   proxyBusy = false;
 });
 $('proxyMode').addEventListener('change', updateProxyMode);
-$('proxyForm').addEventListener('input', () => {
+$('proxySelect').addEventListener('change', () => {
   $('proxyResult').textContent = '';
   $('proxyError').textContent = '';
   updateProxyMode();
@@ -2405,19 +2659,22 @@ $('proxyForm').addEventListener('input', () => {
 async function saveProxy(remove){
   const id = proxyAccountId;
   if (!id || proxyBusy) return;
-  let proxy = null;
-  if (!remove && $('proxyMode').value === 'proxy'){
-    proxy = {server: $('proxyServer').value.trim(), username: $('proxyUsername').value};
-    if ($('proxyPassword').value) proxy.password = $('proxyPassword').value;
+  const mode = remove ? 'direct' : $('proxyMode').value;
+  const body = {proxy_mode: mode, proxy_id: mode === 'bind' ? $('proxySelect').value : ''};
+  if (mode === 'bind' && !body.proxy_id){
+    $('proxyError').textContent = t('请先在「代理池」页添加并启用代理');
+    return;
   }
   proxyBusy = true;
   updateProxyMode();
   $('proxyError').textContent = '';
   $('proxyResult').textContent = '';
   try{
-    await api('/admin/accounts/' + encodeURIComponent(id), {method:'PATCH', body:JSON.stringify({proxy})});
+    await api('/admin/accounts/' + encodeURIComponent(id), {method:'PATCH', body:JSON.stringify(body)});
     if (proxyAccountId === id) $('proxyDialog').close();
-    toast(proxy ? '代理已保存，下次请求生效' : '代理已移除，恢复默认网络', 'ok');
+    toast(mode === 'direct' ? '已切换为默认直连'
+      : mode === 'rotate' ? '已切换为轮询代理池'
+      : '代理绑定已保存，下次请求生效', 'ok');
     await loadPool();
   }catch(e){
     if (proxyAccountId === id) $('proxyError').textContent = t(e.message);
@@ -2428,18 +2685,18 @@ async function saveProxy(remove){
 async function testProxy(){
   const id = proxyAccountId;
   if (!id || proxyBusy) return;
-  $('proxyError').textContent = '';
-  if (!$('proxyServer').value.trim()) {
-    $('proxyError').textContent = t('请输入代理链接');
+  const mode = $('proxyMode').value;
+  if (mode === 'direct') return;
+  if (mode === 'bind' && !$('proxySelect').value){
+    $('proxyError').textContent = t('请先在「代理池」页添加并启用代理');
     return;
   }
-  const proxy = {server: $('proxyServer').value.trim(), username: $('proxyUsername').value};
-  if ($('proxyPassword').value) proxy.password = $('proxyPassword').value;
+  const body = mode === 'bind' ? {proxy_id: $('proxySelect').value} : {};
   proxyBusy = true;
   updateProxyMode();
-  $('proxyResult').textContent = t('正在通过当前输入的代理检测出口与 Muse 会话…');
+  $('proxyResult').textContent = t('正在通过当前所选代理检测出口与 Muse 会话…');
   try{
-    const r = await api('/admin/accounts/' + encodeURIComponent(id) + '/proxy/test', {method:'POST', body:JSON.stringify({proxy})});
+    const r = await api('/admin/accounts/' + encodeURIComponent(id) + '/proxy/test', {method:'POST', body:JSON.stringify(body)});
     const label = value => value === true ? t('已确认') : value === false ? t('未通过') : t('未确认');
     const lines = [t('代理连通：') + label(r.proxy_reachable)];
     if (r.exit_ip) lines.push(t('出口 IP：') + r.exit_ip);
@@ -2450,7 +2707,8 @@ async function testProxy(){
       $('proxyResult').textContent = lines.join('\n');
       $('proxyResult').style.color = r.ok ? 'var(--ok)' : 'var(--warn)';
     }
-    await loadPool();
+    await Promise.all([loadPool(), loadProxies(true)]);
+    updateProxyMode();
   }catch(e){
     if (proxyAccountId === id) {
       $('proxyResult').textContent = '';

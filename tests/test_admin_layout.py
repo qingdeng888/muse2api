@@ -38,7 +38,12 @@ VERSION=json.loads((ROOT/'version.json').read_text(encoding='utf-8'))['version']
 now=int(time.time())
 accounts=[{'id':'fixture'+str(i).zfill(5),'label':'Fixture-'+str(i),'enabled':True,'ok':True,'essential_ok':True,'cookie_count':12,
  'proxy':None,'note':'会话有效 · 自动保活 (VM: RUNNING)','last_used':now-43200,'expires_at':now+172800,
+ 'proxy_mode':('bind' if i==0 else 'rotate' if i==1 else 'direct'),
+ 'proxy_id':('px-fixture' if i==0 else ''),'proxy_server':('socks5://203.0.113.10:1080' if i==0 else None),'proxy_failover':False,
  'quota':{'found':True,'plan':'Free plan','weekly_used_pct':29,'extra_left':'1B tokens left','checked_at':now-10000}} for i in range(8)]
+proxies=[{'id':'px-fixture','server':'socks5://203.0.113.10:1080','username':'','has_password':False,'label':'Fixture-Proxy',
+ 'enabled':True,'created_at':now-86400,'healthy':True,'checking':False,'latency_ms':120,'exit_ip':'203.0.113.9',
+ 'last_check':now-300,'last_error':'','bindings':1}]
 events=[]
 class Handler(BaseHTTPRequestHandler):
  def log_message(self,*a):pass
@@ -46,6 +51,7 @@ class Handler(BaseHTTPRequestHandler):
   path=urlsplit(self.path).path
   if path in ['/','/admin']:data=html;kind='text/html; charset=utf-8'
   elif path=='/admin/accounts':data={'accounts':accounts,'stats':{'total':8,'healthy':8}};kind='application/json'
+  elif path=='/admin/proxies':data={'proxies':proxies};kind='application/json'
   elif path=='/admin/apikey':data={'api_key':'fixture-only'};kind='application/json'
   elif path in ['/admin/update/check','/admin/repo/status']:
    data={'local_version':VERSION,'remote_version':VERSION,'local_sha':'fixture','remote_sha':'fixture','up_to_date':True,'has_update':False,'recent_commits':[]};kind='application/json'
@@ -101,16 +107,18 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cl
      image=page.send('Page.captureScreenshot',{'format':'png'})
      args.screenshots.mkdir(parents=True,exist_ok=True)
      (args.screenshots/('layout-'+lang+'.png')).write_bytes(base64.b64decode(image['result']['data']))
-   if not args.probe_only:
-    page.send('Emulation.setDeviceMetricsOverride',{'width':390,'height':844,'deviceScaleFactor':1,'mobile':False})
-    page.js("openProxy('fixture00000');$('proxyMode').value='proxy';updateProxyMode();$('proxyServer').value='socks5://draft:draft-secret@127.0.0.1:1081';$('proxyServer').dispatchEvent(new Event('input',{bubbles:true}))")
-    assert page.js("!$('proxyTest').disabled && !document.querySelector('.proxy-auth').open")
-    page.js("$('proxyTest').click()");wait("$('proxyResult').innerText.includes('198.51.100.7') && !$('proxyTest').disabled")
-    assert events[-1]['body']['proxy']['server']=='socks5://draft:draft-secret@127.0.0.1:1081'
-    assert page.js("!accounts[0].proxy && $('proxyDialog').getBoundingClientRect().right<=innerWidth")
-    assert all(e['path'].endswith('/proxy/test') for e in events)
-    page.js("$('proxyDialog').close()")
-    wait("$('proxyServer').value==='' && $('proxyPassword').value===''")
+  if not args.probe_only:
+   page.send('Emulation.setDeviceMetricsOverride',{'width':390,'height':844,'deviceScaleFactor':1,'mobile':False})
+   page.js("openProxy('fixture00000')")
+   wait("$('proxyDialog').open && $('proxySelect').options.length>0")
+   page.js("$('proxyMode').value='bind';updateProxyMode();$('proxySelect').value='px-fixture';$('proxySelect').dispatchEvent(new Event('change',{bubbles:true}))")
+   assert page.js("!$('proxyTest').disabled && document.querySelector('.proxy-auth')===null")
+   page.js("$('proxyTest').click()");wait("$('proxyResult').innerText.includes('198.51.100.7') && !$('proxyTest').disabled")
+   assert events[-1]['body'].get('proxy_id')=='px-fixture'
+   assert page.js("!accounts[0].proxy && $('proxyDialog').getBoundingClientRect().right<=innerWidth")
+   assert all(e['path'].endswith('/proxy/test') for e in events)
+   page.js("$('proxyDialog').close()")
+   wait("$('proxyMode').value==='direct' && !$('proxySelect').disabled")
   if not args.probe_only:
    assert not page.js('window.__errors')
    print('PASS: full-width layout, desktop controls, contained mobile scrolling, Chinese/English and test-without-saving')

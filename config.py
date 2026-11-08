@@ -125,6 +125,11 @@ class Config:
     keepalive_disabled_accounts: bool = field(
         default_factory=lambda: _env("MUSE2API_KEEPALIVE_DISABLED_ACCOUNTS", "0").strip() != "0")
 
+    # 代理池健康检查周期（秒）。后台线程按该周期扫描池内全部启用代理：
+    # 出口可达 → 标记健康（绑定了它的账号自动"回家"），失败 → 标记不健康。
+    proxy_check_interval: int = field(
+        default_factory=lambda: max(60, int(_env("MUSE2API_PROXY_CHECK_INTERVAL", "900"))))
+
     @property
     def data_dir(self) -> str:
         return os.path.join(self.base_dir, "data")

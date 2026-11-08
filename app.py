@@ -7,14 +7,21 @@ OpenAI 兼容:
   GET  /v1/models
   GET  /v1/media/{name}
 
-管理（前端账号池管理页面在 GET /）:
+  管理（前端账号池管理页面在 GET /）:
   GET    /admin/status
   GET    /admin/accounts
   POST   /admin/accounts            （单条 / 批量文本 / 批量数组）
-  PATCH  /admin/accounts/{id}       （改标签、启用/禁用）
+  PATCH  /admin/accounts/{id}       （改标签、启用/禁用、代理模式 direct/rotate/bind）
   DELETE /admin/accounts/{id}
   POST   /admin/accounts/{id}/test  （真实打开 muse.ai 验证会话是否有效）
   POST   /admin/accounts/{id}/relogin
+  GET    /admin/proxies             （代理池：健康/延迟/出口IP/绑定数）
+  POST   /admin/proxies             （添加单条，支持 user:pass@host 完整链接）
+  POST   /admin/proxies/bulk        （多行批量导入，自动去重）
+  PATCH  /admin/proxies/{id}        （改密码/标签/启停）
+  DELETE /admin/proxies/{id}        （删除；绑定的账号自动转轮询）
+  POST   /admin/proxies/{id}/test   （出口探测：延迟 + 出口 IP）
+  POST   /admin/proxies/health-check（全量健康扫描）
   GET    /admin/tasks               （任务记录）
   DELETE /admin/tasks/{id}  |  POST /admin/tasks/clear
   GET    /admin/media  |  POST /admin/media/delete  |  DELETE /admin/media/{name}
@@ -56,6 +63,7 @@ from engine import (ESSENTIAL_COOKIES, MAX_REFERENCE_IMAGE_BYTES,
 from engine import MuseProxyError
 from store import Store, account_expiry, min_expiry
 from proxy import normalize_server, request_proxy_context, split_proxy_url
+from pool import POOL, proxy_id as pool_proxy_id
 
 import sys
 log = logging.getLogger("muse2api")
@@ -86,7 +94,64 @@ app.add_middleware(CORSMiddleware,
 
 store = Store(CFG)
 engine = MuseEngine(CFG)
-engine.proxy_resolver = lambda aid: (store.get_account(aid) or {}).get("proxy")
+engine.proxy_resolver = lambda aid: resolve_account_proxy(store.get_account(aid) or {})
+
+
+def _pool_proxy_config(entry: dict) -> dict:
+    """池条目 → 引擎/relay 使用的代理配置（与旧版账号 proxy 同构）。"""
+    return {"server": entry["server"], "username": entry.get("username") or "",
+            "password": entry.get("password") or ""}
+
+
+def _proxy_bind_counts() -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for a in store.accounts:
+        if a.get("proxy_mode") == "bind" and a.get("proxy_id"):
+            counts[a["proxy_id"]] = counts.get(a["proxy_id"], 0) + 1
+    return counts
+
+
+def resolve_account_proxy(acc: dict) -> dict | None:
+    """账号 → 生效代理。
+
+    - 未设置 proxy_mode 的旧数据：直接用账号自带的 proxy 字段（完全向后兼容）；
+    - direct：不走代理；
+    - bind：用绑定的池内代理；若它被禁用/已删除/被健康检查标记不健康，
+      无状态地落到故障转移替补——代理恢复健康后下一次解析自动"回家"；
+    - rotate：每次解析（= 每个任务）从共享游标取下一个健康代理；
+      全部不健康时仍返回游标位（失败可见），池为空则抛 MuseProxyError（绝不静默直连）。
+    """
+    if not acc:
+        return None
+    mode = acc.get("proxy_mode")
+    if not mode:
+        return copy.deepcopy(acc.get("proxy")) or None
+    if mode == "direct":
+        return None
+    if mode == "bind":
+        home = POOL.get(acc.get("proxy_id"))
+        if home and home.get("enabled", True) and POOL.is_healthy(home["id"]):
+            return _pool_proxy_config(home)
+        pick = POOL.failover_pick(exclude_id=acc.get("proxy_id"),
+                                  bind_counts=_proxy_bind_counts())
+        if not pick:
+            raise MuseProxyError("代理池没有可用代理：请先在「代理池」页添加并启用代理")
+        return _pool_proxy_config(pick)
+    if mode == "rotate":
+        pick = POOL.next_healthy(advance=True)
+        if not pick:
+            raise MuseProxyError("代理池为空：请先在「代理池」页添加并启用代理")
+        return _pool_proxy_config(pick)
+    return None
+
+
+def _mark_proxy_result(proxy: dict | None, ok: bool, error: str = "",
+                       latency_ms: float | None = None, exit_ip: str | None = None):
+    """把真实流量 / 检测的结果回写到代理池健康态（被动确认，驱动转移与回切）。"""
+    if not proxy or not proxy.get("server"):
+        return
+    pid = pool_proxy_id(proxy["server"], proxy.get("username") or "")
+    POOL.mark_result(pid, ok, latency_ms=latency_ms, exit_ip=exit_ip, error=error)
 
 
 class ConcurrencyLock:
@@ -190,7 +255,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def _bind_account_proxy(account: dict):
     """Pin the selected account's route for the whole operation, including retries."""
     if hasattr(engine, "_ensure_local"):
-        engine._ensure_local().proxy_snapshot = copy.deepcopy(account.get("proxy")) or None
+        engine._ensure_local().proxy_snapshot = (
+            copy.deepcopy(resolve_account_proxy(account)) if account else None)
 
 
 def _clear_account_proxy():
@@ -200,12 +266,21 @@ def _clear_account_proxy():
             del local.proxy_snapshot
 
 
+def _current_snapshot_proxy() -> dict | None:
+    """当前线程租约钉住的生效代理（用于把真实流量的结果回写代理池）。"""
+    if hasattr(engine, "_ensure_local"):
+        local = engine._ensure_local()
+        if hasattr(local, "proxy_snapshot"):
+            return local.proxy_snapshot
+    return None
+
+
 def _account_proxy(account: dict):
     if hasattr(engine, "_ensure_local"):
         local = engine._ensure_local()
         if hasattr(local, "proxy_snapshot"):
             return local.proxy_snapshot
-    return account.get("proxy")
+    return resolve_account_proxy(account)
 
 
 @contextmanager
@@ -346,9 +421,13 @@ def _renew_and_persist(acc_id: str, wake_vm: bool = True, force: bool = False) -
     if not force and acc.get("ok") is True and (now - last_sync) < 600:
         engine._last_http_renew[acc_id] = last_sync
         return acc
+    used_proxy = _account_proxy(acc)
     try:
         res = engine.renew_session_http(acc["cookies"], acc.get("cookies_exp"), wake_vm=wake_vm,
-                                        **({"proxy": _account_proxy(acc)} if _account_proxy(acc) else {}))
+                                        **({"proxy": used_proxy} if used_proxy else {}))
+        # 真实流量确认：该代理路由可用 → 池内标记健康（绑定的故障转移账号自动回家）
+        if used_proxy:
+            _mark_proxy_result(used_proxy, True)
         engine._last_http_renew[acc_id] = now
         if res.get("cookies"):
             store.update_account(acc_id, cookies=res["cookies"],
@@ -389,19 +468,30 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
                     if leased_id:
                         ACCOUNT_POOL.release(leased_id)
                         leased_id = None
-                    try:
-                        alt = ACCOUNT_POOL.acquire(rotate=True, force_rotate=True, timeout=timeout)
-                    except Exception:
-                        break
-                    if not alt or alt["id"] == cur_id:
+                    alt = None
+                    if isinstance(last_exc, MuseProxyError) and cur_id:
+                        # 代理故障转移：同号换代理重试（无状态解析已自动落到健康替补）
+                        try:
+                            alt = ACCOUNT_POOL.acquire(account_id=cur_id, timeout=min(timeout, 10))
+                        except Exception:
+                            alt = None
                         if alt:
-                            leased_id = alt["id"]
-                        break
-                    cur_id = alt["id"]
-                    leased_id = cur_id
-                    cur_cookies = alt["cookies"]
-                    cur_exp = alt.get("cookies_exp")
-                    log.info("【对话自动切号】切换到备用账号 %s (%s) 重试...", alt.get("label"), cur_id)
+                            leased_id = cur_id
+                            log.info("【对话代理转移】账号 %s 保持不变，切换池内代理重试...", cur_id)
+                    if not alt:
+                        try:
+                            alt = ACCOUNT_POOL.acquire(rotate=True, force_rotate=True, timeout=timeout)
+                        except Exception:
+                            break
+                        if not alt or alt["id"] == cur_id:
+                            if alt:
+                                leased_id = alt["id"]
+                            break
+                        cur_id = alt["id"]
+                        leased_id = cur_id
+                        cur_cookies = alt["cookies"]
+                        cur_exp = alt.get("cookies_exp")
+                        log.info("【对话自动切号】切换到备用账号 %s (%s) 重试...", alt.get("label"), cur_id)
                 elif cur_id:
                     ACCOUNT_POOL.acquire(account_id=cur_id, timeout=timeout)
                     leased_id = cur_id
@@ -434,6 +524,15 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
                     last_exc = exc
                     if cur_id:
                         store.mark(cur_id, False, str(exc))
+                    engine.close_current_page()
+                    if yielded:
+                        break
+                except MuseProxyError as exc:
+                    last_exc = exc
+                    if cur_id:
+                        store.touch_keepalive(cur_id, None, f"代理异常: {str(exc)[:160]}")
+                    # 故障代理标记不健康：同账号下一次解析自动落到池内健康替补
+                    _mark_proxy_result(_current_snapshot_proxy(), False, error=str(exc))
                     engine.close_current_page()
                     if yielded:
                         break
@@ -607,10 +706,28 @@ class AccountPatch(BaseModel):
     label: str | None = None
     enabled: bool | None = None
     proxy: AccountProxy | None = None
+    proxy_mode: str | None = None    # direct | rotate | bind（代理池模式）
+    proxy_id: str | None = None      # bind 模式绑定的池内代理
 
 
 class ProxyTestRequest(BaseModel):
-    proxy: AccountProxy
+    proxy: AccountProxy | None = None
+    proxy_id: str | None = None      # 测试池内指定代理（密码由服务端补全，不经客户端）
+
+
+class ProxyAddRequest(BaseModel):
+    value: str = ""                  # 完整链接，支持 http/socks5/socks5h 与 user:pass@host
+    label: str = ""
+
+
+class ProxyBulkRequest(BaseModel):
+    text: str = ""                   # 每行一个代理，# 开头为注释
+
+
+class ProxyUpdateRequest(BaseModel):
+    password: str | None = None
+    label: str | None = None
+    enabled: bool | None = None
 
 
 # ------------------------- 提示词构造 -------------------------
@@ -1139,13 +1256,25 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                 rem = int(deadline - time.monotonic()) if deadline is not None else timeout
                 if rem <= 0:
                     break
-                alt = ACCOUNT_POOL.acquire(rotate=True, force_rotate=True, timeout=rem)
-                if not alt or (old_id and alt["id"] == old_id):
+                # 代理级故障转移：代理错误 → 同号换代理重试（无状态解析已自动落到健康替补）。
+                # 池没有替代时解析会再次抛错，两次失败后错误可见，绝不静默直连。
+                alt = None
+                if isinstance(last_exc, MuseProxyError) and old_id:
+                    try:
+                        alt = ACCOUNT_POOL.acquire(account_id=old_id, timeout=min(rem, 10))
+                    except Exception:
+                        alt = None
                     if alt:
                         cur_acc = alt
-                    break
-                cur_acc = alt
-                log.info("【生图/视频自动切号】切换到备用账号 %s (%s) 重试...", cur_acc.get("label"), cur_acc["id"])
+                        log.info("【代理故障转移】账号 %s 保持不变，切换池内代理重试...", old_id)
+                if not alt:
+                    alt = ACCOUNT_POOL.acquire(rotate=True, force_rotate=True, timeout=rem)
+                    if not alt or (old_id and alt["id"] == old_id):
+                        if alt:
+                            cur_acc = alt
+                        break
+                    cur_acc = alt
+                    log.info("【生图/视频自动切号】切换到备用账号 %s (%s) 重试...", cur_acc.get("label"), cur_acc["id"])
             try:
                 _bind_account_proxy(cur_acc)
                 refreshed = _renew_and_persist(cur_acc["id"], wake_vm=True, force=(attempt > 0))
@@ -1175,6 +1304,8 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
             except MuseProxyError as exc:
                 last_exc = exc
                 store.touch_keepalive(cur_acc["id"], None, f"代理异常: {str(exc)[:160]}")
+                # 故障代理标记不健康：同账号的下一次解析自动落到池内健康替补
+                _mark_proxy_result(_current_snapshot_proxy(), False, error=str(exc))
                 engine.close_current_page()
             except MuseGenerationError as exc:
                 last_exc = exc
@@ -1851,9 +1982,22 @@ def admin_status(_=Depends(auth)):
 
 
 # ------------------------- 管理：账号池 -------------------------
+def _attach_proxy_view(item: dict):
+    """给账号视图补充代理池展示字段：home 服务器与故障转移状态。"""
+    mode = item.get("proxy_mode")
+    if mode == "bind" and item.get("proxy_id"):
+        home = POOL.get(item["proxy_id"])
+        item["proxy_server"] = home["server"] if home else None
+        item["proxy_failover"] = bool(home) and not POOL.is_healthy(home["id"])
+    elif mode == "rotate":
+        item["proxy_server"] = None
+    return item
+
+
 @app.get("/admin/accounts")
 def list_accounts(_=Depends(auth)):
-    return {"accounts": store.list_accounts(), "stats": store.stats()}
+    accounts = [_attach_proxy_view(i) for i in store.list_accounts()]
+    return {"accounts": accounts, "stats": store.stats()}
 
 
 @app.post("/admin/accounts")
@@ -1914,12 +2058,44 @@ def patch_account(aid: str, req: AccountPatch, _=Depends(auth)):
         if not existing:
             raise HTTPException(404, "账号不存在")
         changes = {"label": req.label, "enabled": req.enabled}
+        if "proxy_mode" in req.model_fields_set or "proxy_id" in req.model_fields_set:
+            if aid in ACCOUNT_POOL.busy_accounts:
+                raise HTTPException(409, "账号正在执行任务或检测，请稍后再修改代理")
+            mode = req.proxy_mode if req.proxy_mode is not None else (existing.get("proxy_mode") or "direct")
+            if mode not in ("direct", "rotate", "bind"):
+                raise HTTPException(400, "proxy_mode 仅支持 direct / rotate / bind")
+            pid = None
+            if mode == "bind":
+                pid = req.proxy_id if req.proxy_id is not None else existing.get("proxy_id")
+                if not pid:
+                    raise HTTPException(400, "bind 模式需要提供 proxy_id")
+                if not POOL.get(pid):
+                    raise HTTPException(404, "代理不存在或已删除，请刷新代理池")
+            # store.update_account 跳过 None 值，清除字段用空串（falsy 即视为未设置）
+            changes.update(proxy_mode=mode, proxy_id=pid or "", proxy={},
+                           synced_at=0, last_keepalive=0, checked_at=0,
+                           proxy_status={}, ok=None)
+            if mode == "bind":
+                changes["note"] = "代理绑定已更新，请重新测试"
+                resolved = _pool_proxy_config(POOL.get(pid))
+                receipt = _PROXY_TEST_RECEIPTS.get(aid)
+                if (receipt and 0 <= time.monotonic() - receipt["at"] <= _PROXY_TEST_RECEIPT_TTL
+                        and receipt["identity"] == _proxy_test_identity(resolved, existing.get("cookies"))):
+                    changes["proxy_status"] = dict(receipt["result"])
+                    changes["note"] = "代理配置已保存，账号浏览器状态待测试"
+            elif mode == "rotate":
+                changes["note"] = "已切换为轮询代理池：每个任务自动选用健康代理"
+            else:
+                changes["note"] = "已切换为默认直连"
+            engine._last_http_renew.pop(aid, None)
+            _PROXY_TEST_RECEIPTS.pop(aid, None)
         if "proxy" in req.model_fields_set:
             if aid in ACCOUNT_POOL.busy_accounts:
                 raise HTTPException(409, "账号正在执行任务或检测，请稍后再修改代理")
             proxy = req.proxy.configuration(existing.get("proxy")) if req.proxy else {}
             if proxy != (existing.get("proxy") or {}):
-                changes.update(proxy=proxy, synced_at=0, last_keepalive=0,
+                changes.update(proxy=proxy, proxy_mode="", proxy_id="",
+                               synced_at=0, last_keepalive=0,
                                checked_at=0, proxy_status={}, ok=None,
                                note="代理已修改，请重新测试")
                 receipt = _PROXY_TEST_RECEIPTS.get(aid)
@@ -1930,7 +2106,7 @@ def patch_account(aid: str, req: AccountPatch, _=Depends(auth)):
                 engine._last_http_renew.pop(aid, None)
             _PROXY_TEST_RECEIPTS.pop(aid, None)
         acc = store.update_account(aid, **changes)
-        return store.public_account(acc)
+        return _attach_proxy_view(store.public_account(acc))
 
 
 @app.post("/admin/accounts/{aid}/proxy/test")
@@ -1938,7 +2114,16 @@ def test_account_proxy(aid: str, req: ProxyTestRequest | None = None, _=Depends(
     import ipaddress
     import requests
     with _account_operation(aid) as acc:
-        proxy = req.proxy.configuration(acc.get("proxy")) if req is not None else _account_proxy(acc)
+        proxy = None
+        if req is not None and req.proxy is not None:
+            proxy = req.proxy.configuration(acc.get("proxy"))
+        elif req is not None and req.proxy_id:
+            entry = POOL.get(req.proxy_id)
+            if not entry:
+                raise HTTPException(404, "代理不存在或已删除，请刷新代理池")
+            proxy = _pool_proxy_config(entry)
+        else:
+            proxy = _account_proxy(acc)   # 账号当前生效代理（池解析 / 旧版字段）
         if not proxy:
             raise HTTPException(400, "请输入代理链接或先保存该账号的代理")
         identity = _proxy_test_identity(proxy, acc.get("cookies"))
@@ -1968,6 +2153,10 @@ def test_account_proxy(aid: str, req: ProxyTestRequest | None = None, _=Depends(
         except (requests.RequestException, ValueError, KeyError, TypeError):
             result["message"] = "代理出口检测失败，请检查代理地址、认证和网络"
         recorded = {**result, "checked_at": int(time.time())}
+        # 出口可达性回写代理池健康态：驱动绑定账号的故障转移与回切
+        _mark_proxy_result(proxy, bool(result.get("proxy_reachable")),
+                           error=result.get("message") or "",
+                           exit_ip=result.get("exit_ip"))
         tested_saved = False
         with ACCOUNT_POOL.cond:
             current = store.get_account(aid)
@@ -1980,6 +2169,173 @@ def test_account_proxy(aid: str, req: ProxyTestRequest | None = None, _=Depends(
                     store.update_account(aid, proxy_status=dict(recorded))
         result["tested_saved_proxy"] = tested_saved
         return result
+
+
+# ------------------------- 代理池 -------------------------
+def _redact_proxy_entry(entry: dict | None) -> dict | None:
+    if not entry:
+        return None
+    return {"id": entry["id"], "server": entry["server"],
+            "username": entry.get("username") or "",
+            "has_password": bool(entry.get("password")),
+            "label": entry.get("label") or "",
+            "enabled": entry.get("enabled", True),
+            "created_at": entry.get("created_at")}
+
+
+def _proxy_view_rows() -> list[dict]:
+    return POOL.snapshot(bind_counts=_proxy_bind_counts())
+
+
+def _check_pool_proxy_once(entry: dict) -> dict:
+    """出口探测：任何能拿到 ipify 响应即视为路由健康（对齐 opencode2api 语义）。"""
+    import ipaddress
+    import requests
+    proxy = _pool_proxy_config(entry)
+    t0 = time.monotonic()
+    try:
+        with request_proxy_context(proxy) as proxy_options, requests.Session() as session:
+            session.trust_env = False
+            response = session.get("https://api.ipify.org?format=json",
+                                   timeout=(5, 10), allow_redirects=False, **proxy_options)
+        latency = (time.monotonic() - t0) * 1000
+        if response.status_code != 200:
+            raise MuseProxyError(f"代理出口检测未成功 (HTTP {response.status_code})")
+        return {"ok": True, "latency_ms": round(latency),
+                "exit_ip": str(ipaddress.ip_address(response.json()["ip"])), "error": ""}
+    except MuseProxyError as exc:
+        return {"ok": False, "latency_ms": None, "exit_ip": None, "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "latency_ms": None, "exit_ip": None,
+                "error": f"代理出口检测失败：{exc}"[:200]}
+
+
+@app.get("/admin/proxies")
+def list_proxies(_=Depends(auth)):
+    return {"proxies": _proxy_view_rows()}
+
+
+@app.post("/admin/proxies")
+def add_proxy(req: ProxyAddRequest, _=Depends(auth)):
+    if not req.value.strip():
+        raise HTTPException(400, "请填写代理链接，例如 socks5://user:pass@host:1080")
+    try:
+        entry, created = POOL.add(req.value.strip(), label=req.label)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "created": created, "proxy": _redact_proxy_entry(entry),
+            "proxies": _proxy_view_rows()}
+
+
+@app.post("/admin/proxies/bulk")
+def bulk_add_proxies(req: ProxyBulkRequest, _=Depends(auth)):
+    if not req.text.strip():
+        raise HTTPException(400, "请粘贴代理列表（每行一个）")
+    res = POOL.bulk_add(req.text)
+    return {"ok": True, **res, "proxies": _proxy_view_rows()}
+
+
+@app.patch("/admin/proxies/{pid}")
+def update_proxy(pid: str, req: ProxyUpdateRequest, _=Depends(auth)):
+    if not POOL.get(pid):
+        raise HTTPException(404, "代理不存在或已删除")
+    fields = req.model_fields_set
+    updated = POOL.update(pid,
+                          password=req.password if "password" in fields else None,
+                          label=req.label if "label" in fields else None,
+                          enabled=req.enabled if "enabled" in fields else None)
+    return {"ok": True, "proxy": _redact_proxy_entry(updated), "proxies": _proxy_view_rows()}
+
+
+@app.delete("/admin/proxies/{pid}")
+def delete_proxy(pid: str, _=Depends(auth)):
+    if not POOL.get(pid):
+        raise HTTPException(404, "代理不存在或已删除")
+    # 绑定该代理的账号自动切换为轮询（对齐 opencode2api 的热迁移语义）
+    binders = [a for a in store.accounts
+               if a.get("proxy_mode") == "bind" and a.get("proxy_id") == pid]
+    for a in binders:
+        store.update_account(a["id"], proxy_mode="rotate", proxy_id="",
+                             note="原绑定代理已删除，已自动切换为轮询代理池")
+        engine._last_http_renew.pop(a["id"], None)
+        _PROXY_TEST_RECEIPTS.pop(a["id"], None)
+    POOL.remove(pid)
+    return {"ok": True, "migrated": len(binders), "proxies": _proxy_view_rows()}
+
+
+@app.post("/admin/proxies/{pid}/test")
+def test_pool_proxy(pid: str, _=Depends(auth)):
+    entry = POOL.get(pid)
+    if not entry:
+        raise HTTPException(404, "代理不存在或已删除")
+    if not entry.get("enabled", True):
+        raise HTTPException(400, "代理已停用，请先启用再测试")
+    if not POOL.start_check(pid):
+        return {"ok": False, "latency_ms": None, "exit_ip": None,
+                "error": "该代理正在检测中，请稍候"}
+    res = _check_pool_proxy_once(entry)
+    POOL.mark_result(pid, res["ok"], latency_ms=res["latency_ms"],
+                     exit_ip=res.get("exit_ip"), error=res["error"])
+    return res
+
+
+@app.post("/admin/proxies/health-check")
+def sweep_pool_health(_=Depends(auth)):
+    rows = []
+    for entry in POOL.entries():
+        if not entry.get("enabled", True):
+            continue
+        if not POOL.start_check(entry["id"]):
+            continue
+        res = _check_pool_proxy_once(entry)
+        POOL.mark_result(entry["id"], res["ok"], latency_ms=res["latency_ms"],
+                         exit_ip=res.get("exit_ip"), error=res["error"])
+        rows.append({"id": entry["id"], **res})
+    return {"ok": True, "checked": len(rows), "results": rows,
+            "proxies": _proxy_view_rows()}
+
+
+def _proxy_health_loop():
+    """代理池健康检查守护线程：周期扫描全部启用代理，结果驱动转移与回切。"""
+    time.sleep(15)   # 先让服务完成启动
+    while True:
+        try:
+            for entry in POOL.entries():
+                if not entry.get("enabled", True):
+                    continue
+                if not POOL.start_check(entry["id"]):
+                    continue
+                res = _check_pool_proxy_once(entry)
+                POOL.mark_result(entry["id"], res["ok"], latency_ms=res["latency_ms"],
+                                 exit_ip=res.get("exit_ip"), error=res["error"])
+                if not res["ok"]:
+                    log.warning("【代理池】%s 检测失败：%s", entry["server"], res["error"])
+                time.sleep(0.3)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("【代理池】健康检查线程异常: %s", exc)
+        time.sleep(CFG.proxy_check_interval)
+
+
+def _migrate_legacy_proxies():
+    """一次性迁移（幂等）：旧版账号自带 proxy → 代理池条目 + bind 模式。"""
+    migrated = 0
+    for a in store.accounts:
+        px = a.get("proxy")
+        if not px or not px.get("server") or a.get("proxy_mode"):
+            continue
+        try:
+            entry, created = POOL.add({"server": px["server"],
+                                       "username": px.get("username") or "",
+                                       "password": px.get("password") or ""})
+        except ValueError:
+            continue
+        store.update_account(a["id"], proxy_mode="bind", proxy_id=entry["id"], proxy={})
+        migrated += 1
+        if created:
+            log.info("【代理池】账号 %s 的专属代理 %s 已迁入代理池（绑定模式）",
+                     a.get("label"), entry["server"])
+    if migrated:
+        log.info("【代理池】迁移完成：%d 个账号改为绑定池内代理", migrated)
 
 
 @app.delete("/admin/accounts/{aid}")
@@ -2343,8 +2699,11 @@ def _probe_account_sync(aid: str, check_quota: bool = False) -> dict:
         with _account_operation(aid) as acc:
             if not acc.get("cookies"):
                 return {"ok": False, "id": aid, "label": acc.get("label", aid), "error": "账号无有效 cookie"}
+            used_proxy = _account_proxy(acc)
             res = engine.renew_session_http(acc["cookies"], acc.get("cookies_exp"), wake_vm=True,
-                                            **({"proxy": _account_proxy(acc)} if _account_proxy(acc) else {}))
+                                            **({"proxy": used_proxy} if used_proxy else {}))
+            if used_proxy:
+                _mark_proxy_result(used_proxy, True)   # 保活流量确认代理路由健康
             store.update_account(
                 aid,
                 cookies=res["cookies"],
@@ -2383,6 +2742,11 @@ def _probe_account_sync(aid: str, check_quota: bool = False) -> dict:
         return {"ok": False, "id": aid, "busy": exc.status_code == 409, "error": str(exc.detail)}
     except MuseAuthError as exc:
         store.touch_keepalive(aid, False, f"保活认证失败: {str(exc)[:200]}")
+        return {"ok": False, "id": aid, "error": str(exc)}
+    except MuseProxyError as exc:
+        # 代理路由失败：标记不健康，绑定账号的下一次解析自动落到健康替补
+        _mark_proxy_result(_current_snapshot_proxy(), False, error=str(exc))
+        store.touch_keepalive(aid, None, f"保活未确认（保留账号状态）: {str(exc)[:200]}")
         return {"ok": False, "id": aid, "error": str(exc)}
     except Exception as exc:
         store.touch_keepalive(aid, None, f"保活未确认（保留账号状态）: {str(exc)[:200]}")
@@ -2844,6 +3208,8 @@ async def _startup():
         CFG.api_key = new_key
         _persist_env("MUSE2API_KEY", new_key)
         log.info("🔑 未检测到 MUSE2API_KEY，已自动生成初始密钥: %s", new_key)
+    _migrate_legacy_proxies()
+    threading.Thread(target=_proxy_health_loop, daemon=True, name="proxy-health").start()
     asyncio.create_task(_keepalive_loop())
 
 
