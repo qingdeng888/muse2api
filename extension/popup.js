@@ -1,15 +1,15 @@
 /* Muse2API Cookie 导入 —— 读取 muse.ai 的 cookie 并 POST 到 muse2api 服务。
  *
  * 关键点：用 chrome.cookies 而不是 document.cookie。
- * muse.ai 的 4 条核心 cookie（hatch_sess / hatch_gw / hatch_vml /
- * hatch_native_auth_device）都带 httpOnly，网页 JS 读不到，
- * 只有浏览器扩展的 cookies 接口能拿到。
+ * muse.ai 的关键会话 cookie（hatch_sess / hatch_vml）带 httpOnly，
+ * 网页 JS 读不到，只有浏览器扩展的 cookies 接口能拿到。
+ * hatch_gw 是可重新签发的路由缓存，不应阻止账号导入。
  */
 
 const $ = (id) => document.getElementById(id);
 const STORE = 'muse2api_ext_cfg';
 
-const ESSENTIAL = ['hatch_sess', 'hatch_gw', 'hatch_vml', 'hatch_native_auth_device'];
+const ESSENTIAL = ['hatch_sess'];
 
 /* ================= 界面语言 / UI language =================
  * 中文是源语言；英文通过下面的词典替换。
@@ -40,8 +40,8 @@ const I18N_EN = {
   '正在读取 muse.ai 的 Cookie…': 'Reading muse.ai cookies…',
   '没读到 muse.ai 的 Cookie。\n请先在这个浏览器里打开并登录 https://muse.ai/ ，再回来点一次。':
     'No muse.ai cookies found.\nOpen and log in to https://muse.ai/ in this browser first, then click again.',
-  '读到 {n} 条 Cookie，但缺核心项：{missing}\n说明这个浏览器还没登录成功。请登录到能看到聊天界面再试。':
-    'Read {n} cookies, but missing core items such as: {missing}\nThis browser has not logged in successfully yet. Log in until you can see the chat interface, then try again.',
+  '读到 {n} 条 Cookie，但缺核心项：{missing}\n未读到登录会话，请检查当前浏览器的登录状态和扩展权限。':
+    'Read {n} cookies, but missing core items such as: {missing}\nThe login session could not be read. Check this browser\'s login and extension permissions.',
   '读到 {n} 条 Cookie，正在上传到 {base} …': 'Read {n} cookies, uploading to {base} …',
   'API Key 不对（服务返回 401）。\n请到管理页「账号池」页顶部复制正确的 API Key。':
     'Invalid API Key (the service returned 401).\nCopy the correct API Key from the top of the "Account Pool" tab on the admin page.',
@@ -181,7 +181,7 @@ async function run() {
     const missing = ESSENTIAL.filter((n) => !(n in cookies));
     if (missing.length) {
       log(t('读到 {n} 条 Cookie，但缺核心项：{missing}\n'
-          + '说明这个浏览器还没登录成功。请登录到能看到聊天界面再试。',
+          + '未读到登录会话，请检查当前浏览器的登录状态和扩展权限。',
           { n: names.length, missing: missing.join(LANG === 'en' ? ', ' : '、') }), 'warn');
       return;
     }

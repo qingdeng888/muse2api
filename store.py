@@ -8,12 +8,13 @@ import threading
 import time
 import uuid
 
+from proxy import public_proxy
+
 _LOCK = threading.Lock()
 
-# 决定账号生死的核心 cookie（与 engine.ESSENTIAL_COOKIES 保持一致）
-# 注：hatch_gw 为网关路由缓存（约1年），服务端续签与 VM 唤醒主要依赖 hatch_sess 和 hatch_vml，缺 gw 亦可正常分配路由
-ESSENTIAL_COOKIES = ("hatch_sess", "hatch_vml",
-                     "hatch_native_auth_device")
+# 登录会话存在性检查；可用性仍须经上游认证（与 engine 一致）
+# hatch_vml 是可选工作区令牌，缺失不能据此拒绝会话导入
+ESSENTIAL_COOKIES = ("hatch_sess",)
 
 
 def _is_pos(v) -> bool:
@@ -123,10 +124,17 @@ class Store:
             _write(self.cfg.accounts_file, self.accounts)
             return acc
 
+    @staticmethod
+    def public_account(account: dict) -> dict:
+        item = {k: v for k, v in account.items() if k not in ("cookies", "proxy")}
+        item["proxy"] = public_proxy(account.get("proxy"))
+        item["cookie_count"] = len(account.get("cookies", {}))
+        return item
+
     def list_accounts(self) -> list[dict]:
         out = []
         for a in self.accounts:
-            item = {k: v for k, v in a.items() if k != "cookies"}
+            item = self.public_account(a)
             ce = a.get("cookies_exp") or {}
             if _is_pos(ce.get("hatch_vml")):
                 item["expires_at"] = int(ce["hatch_vml"])
@@ -167,18 +175,16 @@ class Store:
                     return None
                 elif len(live) > 1:
                     live = [a for a in live if a["id"] != exclude_id] or live
-            if preferred_id and not force_rotate:
+            if preferred_id and not rotate and not force_rotate:
                 for a in live:
                     if a["id"] == preferred_id and a.get("ok") is not False:
-                        sticky_n = getattr(self, "_sticky_count", 0) if getattr(self, "_sticky_id", None) == preferred_id else 0
-                        if not rotate or sticky_n < 15:
-                            self._sticky_id = preferred_id
-                            self._sticky_count = sticky_n + 1
-                            if record_use:
-                                a["last_used"] = time.time()
-                                a["use_count"] = a.get("use_count", 0) + 1
-                                _write(self.cfg.accounts_file, self.accounts)
-                            return a
+                        self._sticky_id = preferred_id
+                        self._sticky_count = 1
+                        if record_use:
+                            a["last_used"] = time.time()
+                            a["use_count"] = a.get("use_count", 0) + 1
+                            _write(self.cfg.accounts_file, self.accounts)
+                        return a
             healthy = [a for a in live if a.get("ok") is not False]
             candidates = healthy if healthy else live
             candidates.sort(key=lambda a: (a.get("last_used") or 0.0, a.get("use_count") or 0))
@@ -237,7 +243,7 @@ class Store:
             for a in self.accounts:
                 if a["id"] == aid:
                     for k, v in kw.items():
-                        if v is not None:
+                        if v is not None or k == "ok":
                             a[k] = v
                     if "cookies_exp" in kw and kw["cookies_exp"] is not None:
                         ce = a["cookies_exp"]
