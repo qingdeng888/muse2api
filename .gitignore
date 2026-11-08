@@ -60,3 +60,11 @@ Thumbs.db
 *.zip
 *.tar.gz
 *.tar
+
+# Local deploy artifacts (Windows non-Docker)
+.pip-cache/
+.tmp/
+profiles/
+
+# ZCode session
+.zcode/

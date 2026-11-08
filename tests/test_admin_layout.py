@@ -6,9 +6,35 @@ from urllib.parse import urlsplit
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from cdp import CDP
+
+def find_browser():
+ env=os.environ.get('MUSE2API_TEST_BROWSER')
+ if env and os.path.isfile(env):return env
+ for name in ('chromium','google-chrome','chrome','msedge'):
+  p=shutil.which(name)
+  if p:return p
+ for p in (r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+           r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+           r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+           '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'):
+  if os.path.isfile(p):return p
+ return shutil.which('chromium') or shutil.which('google-chrome')
+
+def stop_proc(proc):
+ try:
+  if hasattr(os,'killpg'):os.killpg(proc.pid,signal.SIGTERM)
+  else:proc.terminate()
+ except ProcessLookupError:pass
+ try:proc.wait(timeout=8)
+ except subprocess.TimeoutExpired:
+  try:
+   if hasattr(os,'killpg'):os.killpg(proc.pid,signal.SIGKILL)
+   else:proc.kill()
+  except ProcessLookupError:pass
+
 parser=argparse.ArgumentParser();parser.add_argument('--html',default=str(ROOT/'admin.html'));parser.add_argument('--screenshots',type=Path);parser.add_argument('--probe-only',action='store_true');args=parser.parse_args()
 html=Path(args.html).read_bytes()
-VERSION=json.loads((ROOT/'version.json').read_text())['version']
+VERSION=json.loads((ROOT/'version.json').read_text(encoding='utf-8'))['version']
 now=int(time.time())
 accounts=[{'id':'fixture'+str(i).zfill(5),'label':'Fixture-'+str(i),'enabled':True,'ok':True,'essential_ok':True,'cookie_count':12,
  'proxy':None,'note':'会话有效 · 自动保活 (VM: RUNNING)','last_used':now-43200,'expires_at':now+172800,
@@ -33,9 +59,9 @@ class Handler(BaseHTTPRequestHandler):
   self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(data)
 server=ThreadingHTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
 with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home()) as home:
+with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cleanup_errors=True) as home:
  log=open(Path(home)/'chrome.log','wb')
- proc=subprocess.Popen([shutil.which('chromium') or shutil.which('google-chrome'),'--headless=new','--no-sandbox','--disable-dev-shm-usage','--remote-allow-origins=*',
+ proc=subprocess.Popen([find_browser(),'--headless=new','--no-sandbox','--disable-dev-shm-usage','--remote-allow-origins=*',
  '--remote-debugging-port='+str(port),'--user-data-dir='+str(Path(home)/'browser'),'about:blank'],stdout=log,stderr=log,start_new_session=True)
  page=None
  try:
@@ -57,14 +83,15 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home()) as home:
     time.sleep(.1)
    raise AssertionError('Condition failed: '+expr)
   wait("document.querySelectorAll('#poolBody tr').length===8")
-  measure="""(()=>{const m=document.querySelector('main'),w=document.querySelector('#poolBody').closest('.tblwrap'),n=document.querySelector('#poolBody td.ellip');return {viewport:innerWidth,mainWidth:m.getBoundingClientRect().width,bodyWidth:document.documentElement.scrollWidth,tableWidth:w.clientWidth,tableScroll:w.scrollWidth,noteDisplay:getComputedStyle(n).display,noteWhiteSpace:getComputedStyle(n).whiteSpace,buttons:document.querySelectorAll('#poolBody tr:first-child button').length}})()"""
+  measure="""(()=>{const m=document.querySelector('main'),sb=document.querySelector('.sidebar'),w=document.querySelector('#poolBody').closest('.tblwrap'),n=document.querySelector('#poolBody td.ellip');return {viewport:innerWidth,mainWidth:m.getBoundingClientRect().width,sbWidth:sb.getBoundingClientRect().width,bodyWidth:document.documentElement.scrollWidth,tableWidth:w.clientWidth,tableScroll:w.scrollWidth,noteDisplay:getComputedStyle(n).display,noteWhiteSpace:getComputedStyle(n).whiteSpace,buttons:document.querySelectorAll('#poolBody tr:first-child button').length}})()"""
   for lang in (['zh'] if args.probe_only else ['zh','en']):
    if lang=='en':
     page.js("localStorage.setItem('muse2api_lang','en');location.reload()");wait("document.querySelectorAll('#poolBody tr').length===8")
+   page.js("openPage('accounts')")
    for width in ([1920] if args.probe_only else [2560,1920,1536,1440,1366,1280,768,390,320]):
     page.send('Emulation.setDeviceMetricsOverride',{'width':width,'height':1080,'deviceScaleFactor':1,'mobile':False})
     time.sleep(.15);m=page.js(measure);print(json.dumps({'lang':lang,**m}),flush=True)
-    assert m['mainWidth']>=width-24,'Page does not fill the viewport'
+    assert m['mainWidth']>=width-m['sbWidth']-24,'Page does not fill the viewport'
     assert m['bodyWidth']<=width+1,'Page overflows the viewport'
     if width>=1280:assert m['tableScroll']<=m['tableWidth']+1,'Desktop account controls need horizontal scrolling'
     assert m['noteDisplay']=='table-cell' and m['noteWhiteSpace']=='normal','Notes must retain table-cell layout and wrap'
@@ -92,10 +119,5 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home()) as home:
    try:page.send('Browser.close')
    except Exception:pass
    page.close()
-  try:os.killpg(proc.pid,signal.SIGTERM)
-  except ProcessLookupError:pass
-  try:proc.wait(timeout=8)
-  except subprocess.TimeoutExpired:proc.kill();proc.wait()
-  try:os.killpg(proc.pid,signal.SIGKILL)
-  except ProcessLookupError:pass
+  stop_proc(proc)
   time.sleep(.2);log.close();server.shutdown();server.server_close()
