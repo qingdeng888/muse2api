@@ -52,6 +52,11 @@ class Handler(BaseHTTPRequestHandler):
   if path in ['/','/admin']:data=html;kind='text/html; charset=utf-8'
   elif path=='/admin/accounts':data={'accounts':accounts,'stats':{'total':8,'healthy':8}};kind='application/json'
   elif path=='/admin/proxies':data={'proxies':proxies};kind='application/json'
+  elif path=='/admin/mihomo/status':
+   data={'enabled':False,'running':False,'pid':0,'last_error':'','binary_found':False,'binary_path':'',
+         'download':{'state':'idle','percent':0,'error':''},'base_port':10801,'api_port':19090,
+         'nodes':0,'subscriptions':0,'subscription_list':[],'chains':{},'port_map':{},'work_dir':'/tmp/mihomo'};kind='application/json'
+  elif path=='/admin/mihomo/nodes':data={'nodes':[],'auto_group':'BRIDGE-AUTO'};kind='application/json'
   elif path=='/admin/apikey':data={'api_key':'fixture-only'};kind='application/json'
   elif path in ['/admin/update/check','/admin/repo/status']:
    data={'local_version':VERSION,'remote_version':VERSION,'local_sha':'fixture','remote_sha':'fixture','up_to_date':True,'has_update':False,'recent_commits':[]};kind='application/json'
@@ -127,6 +132,10 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cl
    assert page.js("document.querySelector('#pxBody tr').classList.contains('px-selected')")
    page.js("$('pxSelectAll').click()")
    assert page.js("$('pxBulkCount').textContent==='0' && $('pxBulkTest').disabled")
+   page.js("openPage('mihomo')")
+   wait("$('mhFacts').children.length>0")
+   assert page.js("$('mhNodeBody').children.length===1 && $('mhSubBody').children.length===1")
+   assert page.js("$('mhRunBadge').textContent.length>0 && document.querySelectorAll('#mhChainBody tr').length>=1")
   if not args.probe_only:
    assert not page.js('window.__errors')
    print('PASS: full-width layout, desktop controls, contained mobile scrolling, Chinese/English and test-without-saving')

@@ -512,13 +512,14 @@ details.raw pre{margin-top:6px}
       <button data-page="overview" class="active"><span class="nav-no">01</span><span class="nav-ic">◈</span>总览</button>
       <button data-page="accounts"><span class="nav-no">02</span><span class="nav-ic">◍</span>账号池</button>
       <button data-page="proxies"><span class="nav-no">03</span><span class="nav-ic">⇄</span>代理池</button>
-      <button data-page="cookie"><span class="nav-no">04</span><span class="nav-ic">🍪</span>获取 Cookie</button>
-      <button data-page="tasks"><span class="nav-no">05</span><span class="nav-ic">▤</span>任务记录</button>
-      <button data-page="media"><span class="nav-no">06</span><span class="nav-ic">▣</span>媒体库</button>
-      <button data-page="play"><span class="nav-no">07</span><span class="nav-ic">▷</span>接口测试</button>
-      <button data-page="docs"><span class="nav-no">08</span><span class="nav-ic">❐</span>接入文档</button>
-      <button data-page="update"><span class="nav-no">09</span><span class="nav-ic">↻</span>更新中心</button>
-      <button data-page="settings"><span class="nav-no">10</span><span class="nav-ic">⚙</span>设置</button>
+      <button data-page="mihomo"><span class="nav-no">04</span><span class="nav-ic">🛰</span>Mihomo 桥</button>
+      <button data-page="cookie"><span class="nav-no">05</span><span class="nav-ic">🍪</span>获取 Cookie</button>
+      <button data-page="tasks"><span class="nav-no">06</span><span class="nav-ic">▤</span>任务记录</button>
+      <button data-page="media"><span class="nav-no">07</span><span class="nav-ic">▣</span>媒体库</button>
+      <button data-page="play"><span class="nav-no">08</span><span class="nav-ic">▷</span>接口测试</button>
+      <button data-page="docs"><span class="nav-no">09</span><span class="nav-ic">❐</span>接入文档</button>
+      <button data-page="update"><span class="nav-no">10</span><span class="nav-ic">↻</span>更新中心</button>
+      <button data-page="settings"><span class="nav-no">11</span><span class="nav-ic">⚙</span>设置</button>
     </nav>
     <div class="sidebar-foot">
       <div class="side-row">
@@ -694,7 +695,70 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 04 获取 Cookie ==================== -->
+    <!-- ==================== 04 Mihomo 桥 ==================== -->
+    <section class="page hidden" id="page-mihomo">
+      <div class="section" id="mhStatusCard">
+        <div class="section-head"><h3>桥接状态</h3>
+          <span class="badge" id="mhRunBadge" data-no-i18n>…</span>
+          <span class="spacer"></span><span class="eyebrow">mihomo core</span>
+        </div>
+        <p class="hint" data-i18n="mh-intro-hint">
+          国内环境直连 http/socks 代理可能不通。Mihomo 桥在本机把<b>高加密飞行节点</b>（vless / vmess / trojan / ss /
+          hysteria2 / tuic / anytls，支持订阅与分享链接导入）套在原生代理前面：
+          muse 账号 → 本地桥端口 → 飞行节点 → 原代理 → muse 上游；也可让飞行节点<b>直出</b>作为代理池出口。
+        </p>
+        <dl class="facts" id="mhFacts"></dl>
+        <div id="mhDownloadWrap" style="margin-top:10px">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="primary" type="button" id="mhEnableBtn" onclick="mihomoToggleEnabled()">启用桥接</button>
+            <button class="ghost" type="button" id="mhDownloadBtn" onclick="mihomoDownloadBinary(this)">⬇ 下载 mihomo 二进制</button>
+            <span class="sub-line" id="mhDownloadProgress"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h3>飞行节点来源</h3><span class="spacer"></span><span class="eyebrow">subscriptions &amp; links</span></div>
+        <div class="form-grid">
+          <div class="field"><label>订阅名称（可选）</label><input class="inp" id="mhSubName" placeholder="机场-A" autocomplete="off"></div>
+          <div class="field"><label>订阅链接（Clash YAML / base64）</label><input class="inp" id="mhSubUrl" placeholder="https://…" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <button class="primary" type="button" onclick="mihomoAddSub()">+ 添加订阅</button>
+        <div class="tblwrap" style="margin-top:12px"><table class="table">
+          <thead><tr><th>订阅</th><th>节点数</th><th>更新时间</th><th>操作</th></tr></thead>
+          <tbody id="mhSubBody"></tbody>
+        </table></div>
+        <div class="field" style="margin-top:14px"><label>分享链接导入（每行一条：vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// anytls://）</label>
+          <textarea class="inp" id="mhLinks" style="min-height:72px" placeholder="vless://uuid@host:443?security=reality&pbk=…#节点名" spellcheck="false"></textarea>
+        </div>
+        <button class="primary" type="button" onclick="mihomoImportLinks()">+ 导入分享链接</button>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h3>飞行节点</h3><span class="tag" id="mhNodeCount">0</span><span class="spacer"></span>
+          <button class="ghost" type="button" onclick="refreshMihomo()">↻ 刷新</button>
+        </div>
+        <p class="hint" data-i18n="mh-nodes-hint">「导入代理池」= 节点<b>直出</b>：为本节点分配一个本地 SOCKS 端口并创建代理池条目，绑定/轮询/故障转移与普通池代理完全一致。链式封装请到下方「链式封装」区。</p>
+        <div class="tblwrap"><table class="table">
+          <thead><tr><th>节点</th><th>协议</th><th>服务器</th><th>来源</th><th>直出端口</th><th>操作</th></tr></thead>
+          <tbody id="mhNodeBody"></tbody>
+        </table></div>
+      </div>
+
+      <div class="section">
+        <div class="section-head"><h3>链式封装（飞行层 → 原生代理）</h3><span class="spacer"></span><span class="eyebrow">dialer-proxy</span></div>
+        <p class="hint" data-i18n="mh-chain-hint">
+          为池内 http/socks 代理套一层飞行加密层：<b>自动选优</b>（url-test 组自动挑延迟最低的节点、故障自动切换）
+          或<b>指定节点</b>。开启后该代理的出口变为 本地桥端口 → 飞行节点 → 原代理；代理池健康检测天然走全链路。
+        </p>
+        <div class="tblwrap"><table class="table">
+          <thead><tr><th>池内代理</th><th>桥接</th><th>飞行节点</th><th style="width:150px">本地端口</th></tr></thead>
+          <tbody id="mhChainBody"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <!-- ==================== 05 获取 Cookie ==================== -->
     <section class="page hidden" id="page-cookie">
       <div class="notice" id="extensionUpgradeNotice" role="note" data-i18n="extension-upgrade-notice"><span class="ic">⬆️</span><div class="nbody"><b>重要：请手动升级浏览器插件至 1.0.2</b><br>更新服务不会自动升级已加载的扩展。下载新包，替换原扩展目录文件，再到 <code>chrome://extensions</code> 或 <code>edge://extensions</code> 点击“重新加载”。不同浏览器个人资料需分别升级。<br><a href="https://github.com/czg86389-hub/muse2api/releases/download/v1.6.9/muse2api-chrome-extension-v1.6.9.zip">下载扩展 1.0.2</a>；油猴用户请升级脚本至 1.1.2。</div></div>
 
@@ -793,7 +857,7 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 05 任务记录 ==================== -->
+    <!-- ==================== 06 任务记录 ==================== -->
     <section class="page hidden" id="page-tasks">
       <div class="section">
         <div class="section-head"><h3>任务记录</h3><span class="tag" id="taskCount">0</span><span class="spacer"></span>
@@ -808,7 +872,7 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 06 媒体库 ==================== -->
+    <!-- ==================== 07 媒体库 ==================== -->
     <section class="page hidden" id="page-media">
       <div class="section">
         <div class="section-head"><h3>媒体库</h3><span class="tag" id="mediaCount">0</span><span class="spacer"></span>
@@ -820,7 +884,7 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 07 接口测试 ==================== -->
+    <!-- ==================== 08 接口测试 ==================== -->
     <section class="page hidden" id="page-play">
       <div class="section">
         <div class="section-head">
@@ -890,7 +954,7 @@ details.raw pre{margin-top:6px}
       </div>
     </section>
 
-    <!-- ==================== 08 接入文档 ==================== -->
+    <!-- ==================== 09 接入文档 ==================== -->
     <section class="page hidden" id="page-docs">
       <div class="section">
         <div class="section-head"><h3>接入说明</h3><span class="spacer"></span><span class="eyebrow">openai compatible</span></div>
@@ -991,7 +1055,7 @@ for chunk in resp:
       </div>
     </section>
 
-    <!-- ==================== 09 更新中心 ==================== -->
+    <!-- ==================== 10 更新中心 ==================== -->
     <section class="page hidden" id="page-update">
       <div class="section">
         <div class="section-head"><h3>官方仓库版本检测与在线热升级</h3>
@@ -1009,7 +1073,7 @@ for chunk in resp:
       </div>
     </section>
 
-    <!-- ==================== 10 设置 ==================== -->
+    <!-- ==================== 11 设置 ==================== -->
     <section class="page hidden" id="page-settings">
       <div class="split">
         <div class="section">
@@ -1746,6 +1810,10 @@ const I18N_EN_HTML = {
   "auth-hint": "Except for <code>/healthz</code>, <code>/readyz</code> and <code>/v1/media/*</code>, all endpoints require <code>Authorization: Bearer &lt;API Key&gt;</code>. The API Key is configured in <code>MUSE2API_KEY</code> in the server's <code>.env</code>.",
   "tool-calls-hint": "<b>About the \"tool calling\" limitation (important, tested):</b><br>The muse.ai web assistant has an explicit alignment policy that refuses to \"output fake tool-call JSON\". Its actual reply in testing was \"I won't output 'fake tool calls' in this JSON format — I don't have a get_weather tool.\" Three prompt protocols with different wording and placement were tried, and all failed.<br>So: <b>autonomous agent modes</b> that depend on <code>tool_calls</code> (reading/writing files, running commands, etc.) can't be supported; but all <b>Q&amp;A-style</b> usage (chat, coding, explaining, translating, summarizing, images, videos) <b>works fully</b>.<br>If a client sends a <code>tools</code> field anyway, the API won't error: it ignores the tool declarations and answers as a normal chat.",
   "repo-commits-head": "Latest commits:",
+  /* ---- Mihomo 桥富文本块 ---- */
+  "mh-intro-hint": "Direct connections to http/socks proxies may fail inside CN networks. The Mihomo bridge wraps <b>high-encryption flight nodes</b> (vless / vmess / trojan / ss / hysteria2 / tuic / anytls — via subscriptions or share links) in front of your native proxies: muse account → local bridge port → flight node → original proxy → muse upstream. Flight nodes can also serve as pool egress <b>directly</b>.",
+  "mh-nodes-hint": "\"Import to pool\" = <b>direct egress</b>: a local SOCKS port is allocated for the node and a proxy-pool entry is created — binding / rotation / failover behave exactly like any pool proxy. For chaining, use the \"Chaining\" section below.",
+  "mh-chain-hint": "Wrap a pool http/socks proxy with an encrypted flight layer: <b>auto-select</b> (a url-test group picks the lowest-latency node and switches on failure) or a <b>pinned node</b>. Once enabled the proxy's egress becomes local bridge port → flight node → original proxy; pool health checks traverse the full chain automatically.",
   /* ---- 代理池 ---- */
   "pool-add-hint": "Supports <code>http</code> / <code>socks5</code> / <code>socks5h</code>. Paste a full URL including credentials (e.g. <code>socks5://user:pass@proxy.example.com:1080</code>). Multiple lines import as a batch; <code>#</code> starts a comment; duplicates are skipped.",
   "pool-list-hint": "After an account <b>pins</b> a proxy, all of its traffic to muse upstream (browser, session checks, keep-alive) goes through it. On errors it moves to a healthy pool proxy automatically and <b>returns home</b> once the pinned proxy recovers. <b>Rotate</b> mode picks the next healthy proxy for every task. Deleting a bound proxy switches its accounts to rotation automatically.",
@@ -1758,6 +1826,37 @@ const I18N_EN_HTML = {
   "bulk-test": "Test selected", "bulk-enable": "Enable selected", "bulk-disable": "Disable selected",
   "bulk-delete": "Delete selected", "bulk-clear": "Clear selection",
   "选择该代理": "Select this proxy",
+  /* ---- Mihomo 桥 ---- */
+  "Mihomo 桥": "Mihomo Bridge", "飞行节点订阅与链式封装：先加密层再出原生代理": "Flight-node subscriptions and chaining: an encrypted layer in front of your proxies",
+  "桥接状态": "Bridge status", "mihomo core": "mihomo core",
+  "未启用": "Disabled", "未运行": "Not running", "运行中": "Running",
+  "启用状态": "Enabled", "进程 PID": "PID", "监听端口": "Listeners", "飞行节点": "Flight nodes",
+  "订阅数": "Subscriptions", "桥接基端口": "Base port", "控制端口": "Control port", "工作目录": "Work dir", "最近错误": "Last error",
+  "停用桥接": "Disable bridge", "启用桥接": "Enable bridge",
+  "⬇ 下载 mihomo 二进制": "⬇ Download mihomo binary", "⬇ 重新下载 mihomo": "⬇ Re-download mihomo",
+  "飞行节点来源": "Node sources", "subscriptions & links": "subscriptions & links",
+  "订阅名称（可选）": "Subscription name (optional)", "订阅链接（Clash YAML / base64）": "Subscription URL (Clash YAML / base64)",
+  "+ 添加订阅": "+ Add subscription",
+  "分享链接导入（每行一条：vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// anytls://）": "Share-link import (one per line: vless:// vmess:// trojan:// ss:// hysteria2:// tuic:// anytls://)",
+  "+ 导入分享链接": "+ Import share links",
+  "刷新": "Refresh", "还没有订阅。粘贴机场订阅链接即可导入节点": "No subscriptions yet. Paste an airport subscription URL to import nodes",
+  "没有飞行节点。添加订阅或导入分享链接": "No flight nodes. Add a subscription or import share links",
+  "节点": "Node", "协议": "Protocol", "服务器": "Server", "来源": "Source", "直出端口": "Direct port",
+  "导入代理池": "Import to pool", "重建池条目": "Recreate pool entry",
+  "链式封装（飞行层 → 原生代理）": "Chaining (flight layer → native proxy)", "dialer-proxy": "dialer-proxy",
+  "池内代理": "Pool proxy", "桥接": "Bridge", "本地端口": "Local port",
+  "不桥接": "No bridge", "自动选优（url-test 全部节点）": "Auto-select (url-test all nodes)",
+  "桥接中": "Bridged", "桥未运行": "Bridge down", "未桥接": "Not bridged",
+  "代理池中还没有 http/socks 代理可封装": "No http/socks proxies in the pool to chain",
+  "请填写订阅链接": "Enter a subscription URL", "正在拉取订阅…": "Fetching subscription…",
+  "订阅已导入": "Subscription imported", "订阅已更新": "Subscription updated",
+  "订阅已删除": "Subscription deleted", "请粘贴分享链接": "Paste share links first",
+  "已开始后台下载（国内走加速镜像）…": "Background download started (accelerated mirror for CN)…",
+  "桥接已启用，正在应用配置…": "Bridge enabled; applying configuration…", "桥接已停用": "Bridge disabled",
+  "已导入 X 个节点": "Imported X node(s)",
+  "已创建池条目（本地端口 X）": "Pool entry created (local port X)",
+  "该节点的池条目已存在": "A pool entry for this node already exists",
+  "桥接已开启，配置应用中…": "Bridge enabled; applying configuration…", "桥接已关闭": "Bridge disabled",
 };
 /* 含变量的文案：[正则源码, 替换串]，按顺序匹配整段文本（移植自旧版，服务端消息不变） */
 const I18N_EN_PATTERNS = ([
@@ -1876,6 +1975,24 @@ const I18N_EN_PATTERNS = ([
   ["批量启用失败：(.*)", "Bulk enable failed: $1"],
   ["批量停用失败：(.*)", "Bulk disable failed: $1"],
   ["批量删除失败：(.*)", "Bulk delete failed: $1"],
+  /* ---- Mihomo 桥 ---- */
+  ["订阅拉取失败：(.*)", "Subscription fetch failed: $1"],
+  ["订阅内容未解析出任何节点（支持 Clash YAML / base64 / 分享链接）", "No nodes parsed from the subscription (Clash YAML / base64 / share links supported)"],
+  ["未解析出任何节点（支持 vless/vmess/trojan/ss/hysteria2\\(hy2\\)/tuic/anytls 链接）", "No nodes parsed (vless/vmess/trojan/ss/hysteria2(hy2)/tuic/anytls links supported)"],
+  ["端口 (\\d+) 被占用，请释放或更换 base_port/api_port", "Port $1 is occupied; free it or change base_port/api_port"],
+  ["已存在 (\\d+) 个端口分配，请先移除全部桥接与直出后再修改 base_port", "$1 port allocation(s) exist; remove all bridges and direct egress before changing base_port"],
+  ["api_port 与监听端口冲突", "api_port conflicts with a listener port"],
+  ["未找到 mihomo 二进制：请点「下载」或手动放置到 bin/ 目录（或设置 MUSE2API_MIHOMO_PATH）", "mihomo binary not found: click Download or place it in bin/ (or set MUSE2API_MIHOMO_PATH)"],
+  ["Mihomo 代理桥未运行：请在「Mihomo 桥」页启用桥或关闭该代理的链式封装", "The Mihomo bridge is not running: enable it on the \"Mihomo Bridge\" page or disable chaining for this proxy"],
+  ["仅 http / socks5 代理支持链式封装", "Only http / socks5 proxies support chaining"],
+  ["指定的飞行节点不存在", "The pinned flight node does not exist"],
+  ["mihomo 进程启动即退出（详见 (.*?)）", "The mihomo process exited immediately (see $1)"],
+  ["mihomo 控制端口未就绪（超时 6s）", "The mihomo control port was not ready (timeout 6s)"],
+  ["应用失败：(.*)", "Apply failed: $1"],
+  ["看门狗异常：(.*)", "Watcher error: $1"],
+  ["飞行节点不存在或已被订阅刷新移除", "The flight node does not exist or was removed by a subscription refresh"],
+  ["删除订阅会同时移除它导入的飞行节点（已直出的池条目将失效）。", "Deleting a subscription also removes its flight nodes (direct-egress pool entries will stop working)."],
+  ["下载失败：(.*)", "Download failed: $1"],
   ["任务异常: (.*)", "Task error: $1"],
   ["生成失败: (.*)", "Generation failed: $1"],
   ["助手超时: (.*)", "Assistant timeout: $1"],
@@ -2128,13 +2245,14 @@ const PAGES = {
   overview: ['01', '总览', '服务运行状态与关键指标'],
   accounts: ['02', '账号池', '账号池管理：导入、测试、代理与保活'],
   proxies:  ['03', '代理池', '集中管理代理：账号绑定、轮询与故障转移'],
-  cookie:   ['04', '获取 Cookie', '三种导入方式与 Cookie 有效期说明'],
-  tasks:    ['05', '任务记录', '生成任务历史与结果'],
-  media:    ['06', '媒体库', '生成的图片与视频，支持批量管理'],
-  play:     ['07', '接口测试', '对话 / 图片 / 视频在线测试'],
-  docs:     ['08', '接入文档', 'BASE URL、模型与调用示例'],
-  update:   ['09', '更新中心', '版本检测与一键在线升级'],
-  settings: ['10', '设置', '密钥、主题、语言与服务配置'],
+  mihomo:   ['04', 'Mihomo 桥', '飞行节点订阅与链式封装：先加密层再出原生代理'],
+  cookie:   ['05', '获取 Cookie', '三种导入方式与 Cookie 有效期说明'],
+  tasks:    ['06', '任务记录', '生成任务历史与结果'],
+  media:    ['07', '媒体库', '生成的图片与视频，支持批量管理'],
+  play:     ['08', '接口测试', '对话 / 图片 / 视频在线测试'],
+  docs:     ['09', '接入文档', 'BASE URL、模型与调用示例'],
+  update:   ['10', '更新中心', '版本检测与一键在线升级'],
+  settings: ['11', '设置', '密钥、主题、语言与服务配置'],
 };
 let currentPage = 'overview';
 
@@ -2152,6 +2270,7 @@ function openPage(page){
   if (page === 'tasks') loadTasks();
   if (page === 'media') loadMedia();
   if (page === 'proxies') refreshProxyPage();
+  if (page === 'mihomo'){ loadProxies(false).then(refreshMihomo); }
   if (page === 'update') loadRepoStatus(false);
   if (page === 'settings') loadSettings();
   if (page === 'cookie'){ fillCmd(); loadExtFiles(); }
@@ -2759,6 +2878,239 @@ async function sweepProxyHealth(btn){
   }catch(e){ toast('检测失败：' + e.message, 'bad'); }
   finally{
     if (btn){ btn.disabled = false; btn.textContent = t('🔍 一键检测全部'); }
+  }
+}
+
+/* ================= Mihomo 桥 ================= */
+let mhStatus = null;
+let mhNodes = [];
+let mhDownloading = false;
+
+function mhBadge(enabled, running){
+  if (!enabled) return `<span class="badge mute">${esc(t('未启用'))}</span>`;
+  return running ? `<span class="badge ok">${esc(t('运行中'))}</span>`
+                 : `<span class="badge bad">${esc(t('未运行'))}</span>`;
+}
+
+async function refreshMihomo(){
+  if (!authed) return;
+  try{
+    mhStatus = await api('/admin/mihomo/status');
+    const nd = await api('/admin/mihomo/nodes');
+    mhNodes = nd.nodes || [];
+    renderMihomo();
+  }catch(e){ /* 未登录等场景静默 */ }
+  if (mhStatus && mhStatus.download && mhStatus.download.state === 'downloading'){
+    if (!mhDownloading){
+      mhDownloading = true;
+      setTimeout(() => { mhDownloading = false; refreshMihomo(); }, 2000);
+    }
+  }
+}
+
+function renderMihomo(){
+  const s = mhStatus;
+  if (!s || !$('mhFacts')) return;
+  const badge = $('mhRunBadge');
+  if (badge){
+    const tmp = document.createElement('span');
+    tmp.innerHTML = mhBadge(s.enabled, s.running);
+    if (tmp.firstChild){
+      badge.className = tmp.firstChild.className;
+      badge.textContent = tmp.firstChild.textContent;
+    }
+  }
+  const dl = s.download || {};
+  const dlBtn = $('mhDownloadBtn');
+  if (dlBtn){
+    dlBtn.disabled = dl.state === 'downloading';
+    dlBtn.textContent = s.binary_found ? '⬇ 重新下载 mihomo' : '⬇ 下载 mihomo 二进制';
+  }
+  if ($('mhDownloadProgress')){
+    $('mhDownloadProgress').textContent = dl.state === 'downloading' ? `${dl.percent}%`
+      : dl.state === 'error' ? (dl.error || '') : '';
+  }
+  const enBtn = $('mhEnableBtn');
+  if (enBtn){
+    enBtn.textContent = s.enabled ? t('停用桥接') : t('启用桥接');
+    enBtn.className = s.enabled ? 'danger' : 'primary';
+  }
+  $('mhFacts').innerHTML =
+    fact('启用状态', mhBadge(s.enabled, s.running)) +
+    fact('进程 PID', s.running ? String(s.pid) : '—') +
+    fact('监听端口', String(Object.keys(s.port_map || {}).length)) +
+    fact('飞行节点', String(s.nodes ?? 0)) +
+    fact('订阅数', String(s.subscriptions ?? 0)) +
+    fact('桥接基端口', String(s.base_port)) +
+    fact('控制端口', String(s.api_port)) +
+    fact('工作目录', `<span class="mono" style="font-size:11px">${esc(s.work_dir || '')}</span>`) +
+    fact('最近错误', s.last_error ? `<span style="color:var(--bad)">${esc(s.last_error)}</span>` : '—');
+  renderMihomoSubs();
+  renderMihomoNodes();
+  renderMihomoChains();
+}
+
+function renderMihomoSubs(){
+  const tb = $('mhSubBody');
+  if (!tb) return;
+  const rows = Array.isArray(mhStatus?.subscription_list) ? mhStatus.subscription_list : [];
+  if (!rows.length){
+    tb.innerHTML = `<tr><td colspan="4" class="empty">${esc(t('还没有订阅。粘贴机场订阅链接即可导入节点'))}</td></tr>`;
+    return;
+  }
+  tb.innerHTML = rows.map(s => `<tr>
+    <td><b>${esc(s.name)}</b><div class="mono ellip" style="max-width:340px" title="${esc(s.url)}">${esc(s.url)}</div></td>
+    <td class="mono">${s.node_count ?? 0}</td>
+    <td class="mono">${esc(t(ago(s.updated_at)))}</td>
+    <td><div class="acts">
+      <button class="ghost mini" onclick="mihomoRefreshSub('${esc(s.id)}', this)">${esc(t('刷新'))}</button>
+      <button class="danger mini" onclick="mihomoDeleteSub('${esc(s.id)}')">${esc(t('删除'))}</button>
+    </div></td>
+  </tr>`).join('');
+}
+
+function renderMihomoNodes(){
+  const tb = $('mhNodeBody');
+  if (!tb) return;
+  $('mhNodeCount').textContent = mhNodes.length;
+  if (!mhNodes.length){
+    tb.innerHTML = `<tr><td colspan="6" class="empty">${esc(t('没有飞行节点。添加订阅或导入分享链接'))}</td></tr>`;
+    return;
+  }
+  tb.innerHTML = mhNodes.map(n => {
+    const direct = n.direct_port
+      ? `<span class="badge ok">${n.direct_port}</span>`
+      : '<span class="badge mute">—</span>';
+    return `<tr>
+      <td><b>${esc(n.name)}</b></td>
+      <td><span class="badge info">${esc(n.type)}</span></td>
+      <td class="mono ellip" style="max-width:220px" title="${esc(n.server)}">${esc(n.server)}:${n.port}</td>
+      <td>${esc(n.source)}</td>
+      <td>${direct}</td>
+      <td><div class="acts">
+        <button class="ghost mini" onclick="mihomoDirectImport('${esc(n.key)}')">${n.direct_port ? esc(t('重建池条目')) : esc(t('导入代理池'))}</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderMihomoChains(){
+  const tb = $('mhChainBody');
+  if (!tb) return;
+  const rows = poolRows.filter(p => /^socks5h?:\/\//.test(p.server) || /^http:\/\//.test(p.server));
+  if (!rows.length){
+    tb.innerHTML = `<tr><td colspan="4" class="empty">${esc(t('代理池中还没有 http/socks 代理可封装'))}</td></tr>`;
+    return;
+  }
+  const nodeOpts = mhNodes.map(n => `<option value="${esc(n.key)}">${esc(n.name)}</option>`).join('');
+  tb.innerHTML = rows.map(p => {
+    const b = p.bridge;
+    const flight = b ? b.flight : '';
+    const sel = `<select class="inp" style="max-width:240px;padding:5px 26px 5px 9px;font-size:12px" data-no-i18n
+                   onchange="mihomoSetChain('${esc(p.id)}', this.value)">
+      <option value="" ${!flight ? 'selected' : ''}>${esc(t('不桥接'))}</option>
+      <option value="AUTO" ${flight === 'AUTO' ? 'selected' : ''}>${esc(t('自动选优（url-test 全部节点）'))}</option>
+      ${nodeOpts}
+    </select>`;
+    const state = b
+      ? `<span class="badge ${b.running ? 'ok' : 'bad'}">${b.running ? esc(t('桥接中')) : esc(t('桥未运行'))}</span>`
+      : `<span class="badge mute">${esc(t('未桥接'))}</span>`;
+    const port = b && b.port ? `<span class="mono">127.0.0.1:${b.port}</span>` : '—';
+    return `<tr>
+      <td><b>${esc(p.label || p.server)}</b><div class="mono proxy-summary">${esc(p.server)}</div></td>
+      <td>${state}</td>
+      <td>${sel}</td>
+      <td>${port}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function mihomoToggleEnabled(){
+  const s = mhStatus;
+  if (!s) return;
+  const target = !s.enabled;
+  try{
+    const r = await api('/admin/mihomo/settings', {method:'PUT', body: JSON.stringify({enabled: target})});
+    mhStatus = r.status;
+    toast(target ? '桥接已启用，正在应用配置…' : '桥接已停用', 'ok');
+    renderMihomo();
+    refreshMihomo();
+  }catch(e){ toast('操作失败：' + e.message, 'bad'); }
+}
+
+async function mihomoDownloadBinary(btn){
+  if (btn) btn.disabled = true;
+  try{
+    await api('/admin/mihomo/binary/download', {method:'POST'});
+    toast('已开始后台下载（国内走加速镜像）…', 'ok');
+    refreshMihomo();
+  }catch(e){ toast('下载失败：' + e.message, 'bad'); }
+  finally{ if (btn) btn.disabled = false; }
+}
+
+async function mihomoAddSub(){
+  const name = $('mhSubName').value.trim();
+  const url = $('mhSubUrl').value.trim();
+  if (!url) return toast('请填写订阅链接', 'warn');
+  toast('正在拉取订阅…', 'warn');
+  try{
+    await api('/admin/mihomo/subscriptions', {method:'POST', body: JSON.stringify({name, url})});
+    $('mhSubName').value = ''; $('mhSubUrl').value = '';
+    toast('订阅已导入', 'ok');
+    refreshMihomo();
+  }catch(e){ toast('导入失败：' + e.message, 'bad'); }
+}
+
+async function mihomoRefreshSub(sid, btn){
+  if (btn) btn.disabled = true;
+  try{
+    await api(`/admin/mihomo/subscriptions/${sid}/refresh`, {method:'POST'});
+    toast('订阅已更新', 'ok');
+    refreshMihomo();
+  }catch(e){ toast('刷新失败：' + e.message, 'bad'); }
+  finally{ if (btn) btn.disabled = false; }
+}
+
+async function mihomoDeleteSub(sid){
+  if (!confirm(t('删除订阅会同时移除它导入的飞行节点（已直出的池条目将失效）。'))) return;
+  try{
+    await api(`/admin/mihomo/subscriptions/${sid}`, {method:'DELETE'});
+    toast('订阅已删除', 'ok');
+    refreshMihomo();
+  }catch(e){ toast('删除失败：' + e.message, 'bad'); }
+}
+
+async function mihomoImportLinks(){
+  const el = $('mhLinks');
+  const text = el.value.trim();
+  if (!text) return toast('请粘贴分享链接', 'warn');
+  try{
+    const r = await api('/admin/mihomo/links', {method:'POST', body: JSON.stringify({text})});
+    toast(`已导入 ${r.added} 个节点`, 'ok');
+    el.value = '';
+    refreshMihomo();
+  }catch(e){ toast('导入失败：' + e.message, 'bad'); }
+}
+
+async function mihomoDirectImport(key){
+  try{
+    const r = await api(`/admin/mihomo/nodes/${encodeURIComponent(key)}/direct`, {method:'POST'});
+    toast(r.created ? `已创建池条目（本地端口 ${r.port}）` : '该节点的池条目已存在', 'ok');
+    poolRows = r.proxies || []; poolLoadedAt = Date.now();
+    refreshMihomo();
+    renderProxyPage();
+  }catch(e){ toast('导入失败：' + e.message, 'bad'); }
+}
+
+async function mihomoSetChain(pid, flight){
+  try{
+    const r = await api(`/admin/mihomo/chains/${pid}`, {method:'PUT', body: JSON.stringify({flight: flight || null})});
+    poolRows = r.proxies || []; poolLoadedAt = Date.now();
+    toast(flight ? '桥接已开启，配置应用中…' : '桥接已关闭', 'ok');
+    renderMihomo();
+  }catch(e){
+    toast('设置失败：' + e.message, 'bad');
+    refreshMihomo();
   }
 }
 

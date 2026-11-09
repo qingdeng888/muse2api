@@ -68,3 +68,10 @@ profiles/
 
 # ZCode session
 .zcode/
+
+# ds2 参考源码与 mihomo 运行时（绝不入库）
+ds2-main.zip
+.tmp/
+bin/
+data/mihomo/
+data/proxies.json

@@ -64,6 +64,7 @@ from engine import MuseProxyError
 from store import Store, account_expiry, min_expiry
 from proxy import normalize_server, request_proxy_context, split_proxy_url
 from pool import POOL, proxy_id as pool_proxy_id
+from mihomo import BRIDGE, AUTO_GROUP as MIHOMO_AUTO_GROUP
 
 import sys
 log = logging.getLogger("muse2api")
@@ -111,6 +112,20 @@ def _proxy_bind_counts() -> dict[str, int]:
     return counts
 
 
+def _pool_entry_effective(entry: dict) -> dict:
+    """池条目 → 实际拨号配置。
+
+    链式桥接的代理换成本地桥端口（账号 → 桥 → 飞行节点 → 原代理 → muse）；
+    桥未运行时抛 MuseProxyError（fail-closed，绝不静默直连）。"""
+    cfg = _pool_proxy_config(entry)
+    ch = BRIDGE.chain_info(entry.get("id", ""))
+    if ch and ch.get("port"):
+        if not BRIDGE.is_running():
+            raise MuseProxyError("Mihomo 代理桥未运行：请在「Mihomo 桥」页启用桥或关闭该代理的链式封装")
+        return {"server": f"socks5://127.0.0.1:{ch['port']}", "username": "", "password": ""}
+    return cfg
+
+
 def resolve_account_proxy(acc: dict) -> dict | None:
     """账号 → 生效代理。
 
@@ -131,17 +146,17 @@ def resolve_account_proxy(acc: dict) -> dict | None:
     if mode == "bind":
         home = POOL.get(acc.get("proxy_id"))
         if home and home.get("enabled", True) and POOL.is_healthy(home["id"]):
-            return _pool_proxy_config(home)
+            return _pool_entry_effective(home)
         pick = POOL.failover_pick(exclude_id=acc.get("proxy_id"),
                                   bind_counts=_proxy_bind_counts())
         if not pick:
             raise MuseProxyError("代理池没有可用代理：请先在「代理池」页添加并启用代理")
-        return _pool_proxy_config(pick)
+        return _pool_entry_effective(pick)
     if mode == "rotate":
         pick = POOL.next_healthy(advance=True)
         if not pick:
             raise MuseProxyError("代理池为空：请先在「代理池」页添加并启用代理")
-        return _pool_proxy_config(pick)
+        return _pool_entry_effective(pick)
     return None
 
 
@@ -728,6 +743,25 @@ class ProxyUpdateRequest(BaseModel):
     password: str | None = None
     label: str | None = None
     enabled: bool | None = None
+
+
+class MihomoSettingsRequest(BaseModel):
+    enabled: bool | None = None
+    base_port: int | None = None
+    api_port: int | None = None
+
+
+class MihomoSubRequest(BaseModel):
+    name: str = ""
+    url: str
+
+
+class MihomoLinkRequest(BaseModel):
+    text: str = ""
+
+
+class MihomoChainRequest(BaseModel):
+    flight: str | None = None      # 'AUTO' | 飞行节点 key | None=关闭桥接
 
 
 # ------------------------- 提示词构造 -------------------------
@@ -2121,7 +2155,7 @@ def test_account_proxy(aid: str, req: ProxyTestRequest | None = None, _=Depends(
             entry = POOL.get(req.proxy_id)
             if not entry:
                 raise HTTPException(404, "代理不存在或已删除，请刷新代理池")
-            proxy = _pool_proxy_config(entry)
+            proxy = _pool_entry_effective(entry)
         else:
             proxy = _account_proxy(acc)   # 账号当前生效代理（池解析 / 旧版字段）
         if not proxy:
@@ -2184,14 +2218,21 @@ def _redact_proxy_entry(entry: dict | None) -> dict | None:
 
 
 def _proxy_view_rows() -> list[dict]:
-    return POOL.snapshot(bind_counts=_proxy_bind_counts())
+    rows = POOL.snapshot(bind_counts=_proxy_bind_counts())
+    for r in rows:
+        ch = BRIDGE.chain_info(r["id"])
+        if ch:
+            r["bridge"] = {"flight": ch.get("flight"), "port": ch.get("port"),
+                           "running": BRIDGE.is_running()}
+    return rows
 
 
 def _check_pool_proxy_once(entry: dict) -> dict:
-    """出口探测：任何能拿到 ipify 响应即视为路由健康（对齐 opencode2api 语义）。"""
+    """出口探测：任何能拿到 ipify 响应即视为路由健康（对齐 opencode2api 语义）。
+    桥接代理走全链路（账号视角同路径），保证健康态是端到端的。"""
     import ipaddress
     import requests
-    proxy = _pool_proxy_config(entry)
+    proxy = _pool_entry_effective(entry)
     t0 = time.monotonic()
     try:
         with request_proxy_context(proxy) as proxy_options, requests.Session() as session:
@@ -2293,6 +2334,112 @@ def sweep_pool_health(_=Depends(auth)):
         rows.append({"id": entry["id"], **res})
     return {"ok": True, "checked": len(rows), "results": rows,
             "proxies": _proxy_view_rows()}
+
+
+def _mihomo_chain_entries() -> list[dict]:
+    """给 BRIDGE 提供链式封装所需的池代理配置。"""
+    out = []
+    for pid, ch in BRIDGE.status().get("chains", {}).items():
+        entry = POOL.get(pid)
+        if entry:
+            out.append({"pid": pid, "flight": ch.get("flight"),
+                        "config": _pool_proxy_config(entry)})
+    return out
+
+
+@app.get("/admin/mihomo/status")
+def mihomo_status(_=Depends(auth)):
+    return BRIDGE.status()
+
+
+@app.put("/admin/mihomo/settings")
+def mihomo_settings(req: MihomoSettingsRequest, _=Depends(auth)):
+    err = BRIDGE.set_settings(enabled=req.enabled, base_port=req.base_port, api_port=req.api_port)
+    if err:
+        raise HTTPException(400, err)
+    BRIDGE.request_apply()
+    return {"ok": True, "status": BRIDGE.status()}
+
+
+@app.post("/admin/mihomo/binary/download")
+def mihomo_download_binary(_=Depends(auth)):
+    if BRIDGE.resolve_binary():
+        return {"ok": True, "already": True, "download": BRIDGE.download}
+    BRIDGE.download_binary()
+    return {"ok": True, "download": BRIDGE.download}
+
+
+@app.get("/admin/mihomo/subscriptions")
+def mihomo_list_subs(_=Depends(auth)):
+    return {"subscriptions": BRIDGE.list_subscriptions()}
+
+
+@app.post("/admin/mihomo/subscriptions")
+def mihomo_add_sub(req: MihomoSubRequest, _=Depends(auth)):
+    sub, err = BRIDGE.add_subscription(req.name, req.url)
+    if err:
+        raise HTTPException(400, err)
+    BRIDGE.request_apply()
+    return {"ok": True, "subscription": sub, "nodes": BRIDGE.list_nodes()}
+
+
+@app.post("/admin/mihomo/subscriptions/{sid}/refresh")
+def mihomo_refresh_sub(sid: str, _=Depends(auth)):
+    sub, err = BRIDGE.refresh_subscription(sid)
+    if err:
+        raise HTTPException(400, err)
+    BRIDGE.request_apply()
+    return {"ok": True, "subscription": sub, "nodes": BRIDGE.list_nodes()}
+
+
+@app.delete("/admin/mihomo/subscriptions/{sid}")
+def mihomo_delete_sub(sid: str, _=Depends(auth)):
+    changed = BRIDGE.delete_subscription(sid)
+    if not changed:
+        raise HTTPException(404, "订阅不存在")
+    BRIDGE.request_apply()
+    return {"ok": True, "nodes": BRIDGE.list_nodes()}
+
+
+@app.post("/admin/mihomo/links")
+def mihomo_import_links(req: MihomoLinkRequest, _=Depends(auth)):
+    r = BRIDGE.import_links(req.text)
+    if r.get("error"):
+        raise HTTPException(400, r["error"])
+    BRIDGE.request_apply()
+    return {"ok": True, **r, "nodes": BRIDGE.list_nodes()}
+
+
+@app.get("/admin/mihomo/nodes")
+def mihomo_nodes(_=Depends(auth)):
+    return {"nodes": BRIDGE.list_nodes(), "auto_group": MIHOMO_AUTO_GROUP}
+
+
+@app.post("/admin/mihomo/nodes/{node_key:path}/direct")
+def mihomo_direct_import(node_key: str, _=Depends(auth)):
+    """直出：为飞行节点分配本地端口并创建池条目。"""
+    port = BRIDGE.register_direct(node_key)
+    if not port:
+        raise HTTPException(404, "飞行节点不存在或已被订阅刷新移除")
+    node = next((n for n in BRIDGE.list_nodes() if n["key"] == node_key), None)
+    label = node["name"] if node else node_key.split("::")[-1]
+    server = f"socks5://127.0.0.1:{port}"
+    entry, created = POOL.add(server, label=f"桥·{label}"[:60])
+    BRIDGE.request_apply()
+    return {"ok": True, "created": created, "port": port,
+            "proxy": _redact_proxy_entry(entry), "proxies": _proxy_view_rows()}
+
+
+@app.put("/admin/mihomo/chains/{pid}")
+def mihomo_set_chain(pid: str, req: MihomoChainRequest, _=Depends(auth)):
+    entry = POOL.get(pid)
+    if not entry:
+        raise HTTPException(404, "代理不存在或已删除")
+    res, err = BRIDGE.set_chain(pid, req.flight, entry)
+    if err:
+        raise HTTPException(400, err)
+    BRIDGE.request_apply()
+    return {"ok": True, "chain": res, "proxies": _proxy_view_rows()}
 
 
 def _proxy_health_loop():
@@ -3209,10 +3356,13 @@ async def _startup():
         _persist_env("MUSE2API_KEY", new_key)
         log.info("🔑 未检测到 MUSE2API_KEY，已自动生成初始密钥: %s", new_key)
     _migrate_legacy_proxies()
+    BRIDGE.set_chain_entries_provider(_mihomo_chain_entries)
+    BRIDGE.start_if_enabled()
     threading.Thread(target=_proxy_health_loop, daemon=True, name="proxy-health").start()
     asyncio.create_task(_keepalive_loop())
 
 
 @app.on_event("shutdown")
 def _shutdown():
+    BRIDGE.stop()
     engine.stop()
