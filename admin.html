@@ -3218,24 +3218,35 @@ function renderMihomoChains(){
     tb.innerHTML = `<tr><td colspan="4" class="empty">${esc(t('代理池中还没有 http/socks 代理可封装'))}</td></tr>`;
     return;
   }
-  const nodeOpts = mhNodes.map(n => `<option value="${esc(n.key)}">${esc(n.name)}</option>`).join('');
+  // 选项按行内联生成（每个 option 需要独立的 selected 状态）
   tb.innerHTML = rows.map(p => {
     const b = p.bridge;
     const flight = b ? b.flight : '';
-    const sel = `<select class="inp" style="max-width:240px;padding:5px 26px 5px 9px;font-size:12px" data-no-i18n
+    // 指定节点的选项必须自带上 selected，否则下拉框会一直显示第一项「不桥接」，
+    // 与实际桥接状态不一致（且此时重选「不桥接」值未变，onchange 不触发）。
+    const opts = mhNodes.map(n => {
+      const on = flight === n.key;
+      return `<option value="${esc(n.key)}"${on ? ' selected' : ''}>${esc(n.name)}</option>`;
+    }).join('');
+    const sel = `<select class="inp" id="mhChainSel-${esc(p.id)}" style="max-width:240px;padding:5px 26px 5px 9px;font-size:12px" data-no-i18n
                    onchange="mihomoSetChain('${esc(p.id)}', this.value)">
-      <option value="" ${!flight ? 'selected' : ''}>${esc(t('不桥接'))}</option>
-      <option value="AUTO" ${flight === 'AUTO' ? 'selected' : ''}>${esc(t('自动选优（url-test 全部节点）'))}</option>
-      ${nodeOpts}
+      <option value=""${!flight ? ' selected' : ''}>${esc(t('不桥接'))}</option>
+      <option value="AUTO"${flight === 'AUTO' ? ' selected' : ''}>${esc(t('自动选优（url-test 全部节点）'))}</option>
+      ${opts}
     </select>`;
+    // 兜底：实际绑定的节点可能已被巡检删除/订阅刷新移除，此时补一个占位项并提示
+    const missing = flight && flight !== 'AUTO' && !mhNodes.some(n => n.key === flight);
+    const missingRow = missing
+      ? `<div class="sub-line" style="color:var(--bad)">${esc(t('指定节点已不存在，实际按自动选优运行'))}</div>` : '';
     const state = b
       ? `<span class="badge ${b.running ? 'ok' : 'bad'}">${b.running ? esc(t('桥接中')) : esc(t('桥未运行'))}</span>`
       : `<span class="badge mute">${esc(t('未桥接'))}</span>`;
     const port = b && b.port ? `<span class="mono">127.0.0.1:${b.port}</span>` : '—';
+    const flightLabel = !b ? '' : (flight === 'AUTO' ? t('自动选优') : (missing ? t('已失效') : ''));
     return `<tr>
       <td><b>${esc(p.label || p.server)}</b><div class="mono proxy-summary">${esc(p.server)}</div></td>
-      <td>${state}</td>
-      <td>${sel}</td>
+      <td>${state}${flightLabel ? `<div class="sub-line">${esc(flightLabel)}</div>` : ''}</td>
+      <td>${sel}${missingRow}</td>
       <td>${port}</td>
     </tr>`;
   }).join('');

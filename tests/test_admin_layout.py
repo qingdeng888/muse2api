@@ -43,7 +43,13 @@ accounts=[{'id':'fixture'+str(i).zfill(5),'label':'Fixture-'+str(i),'enabled':Tr
  'quota':{'found':True,'plan':'Free plan','weekly_used_pct':29,'extra_left':'1B tokens left','checked_at':now-10000}} for i in range(8)]
 proxies=[{'id':'px-fixture','server':'socks5://203.0.113.10:1080','username':'','has_password':False,'label':'Fixture-Proxy',
  'enabled':True,'created_at':now-86400,'healthy':True,'checking':False,'latency_ms':120,'exit_ip':'203.0.113.9',
- 'last_check':now-300,'last_error':'','bindings':1}]
+ 'last_check':now-300,'last_error':'','bindings':1,
+ # 已桥接到指定节点：下拉框必须回显该节点，而不是退回到「不桥接」
+ 'bridge':{'flight':'link::FixtureNode','port':10802,'running':True}},
+ {'id':'px-auto','server':'http://198.51.100.20:8080','username':'u','has_password':True,'label':'Auto-Bridge',
+ 'enabled':True,'created_at':now-80000,'healthy':True,'checking':False,'latency_ms':300,'exit_ip':'198.51.100.20',
+ 'last_check':now-300,'last_error':'','bindings':0,
+ 'bridge':{'flight':'AUTO','port':10803,'running':True}}]
 events=[]
 class Handler(BaseHTTPRequestHandler):
  def log_message(self,*a):pass
@@ -128,9 +134,9 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cl
    page.js("$('proxyDialog').close()")
    wait("$('proxyMode').value==='direct' && !$('proxySelect').disabled")
    page.js("openPage('proxies')")
-   wait("document.querySelectorAll('#pxBody tr[data-pid]').length===1")
+   wait("document.querySelectorAll('#pxBody tr[data-pid]').length===2")
    page.js("$('pxSelectAll').click()")
-   assert page.js("$('pxBulkCount').textContent==='1' && $('pxSelectAll').checked && $('pxSelectAll').indeterminate===false")
+   assert page.js("$('pxBulkCount').textContent==='2' && $('pxSelectAll').checked && $('pxSelectAll').indeterminate===false")
    assert page.js("!$('pxBulkTest').disabled && !$('pxBulkEnable').disabled && !$('pxBulkDisable').disabled && !$('pxBulkDelete').disabled")
    assert page.js("document.querySelector('#pxBody tr').classList.contains('px-selected')")
    page.js("$('pxSelectAll').click()")
@@ -139,6 +145,16 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cl
    wait("$('mhFacts').children.length>0")
    assert page.js("$('mhNodeBody').children.length===1 && $('mhSubBody').children.length===1")
    assert page.js("$('mhRunBadge').textContent.length>0 && document.querySelectorAll('#mhChainBody tr').length>=1")
+   # 关键回归：链式封装下拉框必须回显真实绑定（指定节点 / AUTO），不能一律显示「不桥接」
+   assert page.js("document.querySelector('#mhChainSel-px-fixture').value==='link::FixtureNode'"), \
+       'chained-to-pinned-node row must display that node as selected'
+   assert page.js("document.querySelector('#mhChainSel-px-auto').value==='AUTO'"), \
+       'auto-escaped row must display AUTO as selected'
+   # 切到「不桥接」必须能直接生效（值从节点变空 → onchange 触发 → flight 传 null）
+   page.js("window.__chainCalls=[]; mihomoSetChain=(pid,flight)=>{window.__chainCalls.push([pid,flight||null]); return Promise.resolve();}")
+   page.js("const s=document.querySelector('#mhChainSel-px-fixture'); s.value=''; s.dispatchEvent(new Event('change'))")
+   assert page.js("JSON.stringify(window.__chainCalls)===JSON.stringify([['px-fixture',null]])"), \
+       'selecting "no bridge" must send flight=null in one action'
    # 飞行节点多选：全选 → 批量按钮可用 → 取消选择
    page.js("$('mhNodeSelectAll').click()")
    assert page.js("$('mhNodeSelCount').textContent==='1' && !$('mhNodeBulkEnable').disabled && !$('mhNodeBulkDisable').disabled && !$('mhNodeBulkDelete').disabled && !$('mhNodeBulkTest').disabled")
