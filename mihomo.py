@@ -26,6 +26,8 @@ import subprocess
 import threading
 import time
 import zipfile
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 import requests
@@ -402,6 +404,15 @@ _DOWNLOAD_MAX_BYTES = 256 << 20
 AUTO_GROUP = "BRIDGE-AUTO"
 
 
+@contextmanager
+def _thread_pool(workers: int):
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        yield pool
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 class MihomoBridge:
     """mihomo 子进程与飞行节点的全托管状态机。线程安全。"""
 
@@ -425,6 +436,9 @@ class MihomoBridge:
         self._nodes: list[dict] = []
         self._port_map: dict[str, int] = {}
         self._chains: dict[str, dict] = {}
+        self._disabled: set[str] = set()      # 用户停用的节点 key
+        self._removed: set[str] = set()       # 用户删除的节点 key（刷新不复活）
+        self._delays: dict[str, dict] = {}    # 节点延迟测试结果（内存）
         self._wake = threading.Event()
         self._load()
 
@@ -440,6 +454,10 @@ class MihomoBridge:
             self._nodes = data.get("nodes") or []
             self._port_map = data.get("port_map") or {}
             self._chains = data.get("chains") or {}
+            self._disabled = set(data.get("disabled_nodes") or [])
+            self._removed = set(data.get("removed_nodes") or [])
+            for n in self._nodes:
+                n.setdefault("enabled", n["key"] not in self._disabled)
         except (OSError, ValueError):
             pass
 
@@ -447,7 +465,9 @@ class MihomoBridge:
         os.makedirs(self.dir, exist_ok=True)
         data = {"enabled": self._enabled, "base_port": self._base_port,
                 "api_port": self._api_port, "subscriptions": self._subscriptions,
-                "nodes": self._nodes, "port_map": self._port_map, "chains": self._chains}
+                "nodes": self._nodes, "port_map": self._port_map, "chains": self._chains,
+                "disabled_nodes": sorted(self._disabled),
+                "removed_nodes": sorted(self._removed)}
         tmp = self.state_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -565,14 +585,19 @@ class MihomoBridge:
         return {"added": max(0, added)}
 
     def _upsert_nodes(self, source: str, nodes: list[dict]):
-        """source::name 限定命名；同源替换、跨源共存。"""
+        """source::name 限定命名；同源替换、跨源共存。
+        已停用的节点与手动删除的墓碑（_disabled/_removed）在刷新后保持原状态，
+        否则每次刷新订阅都"复活"用户刻意关掉/删掉的节点。"""
         fresh = []
         for n in nodes:
             key = f"{source}::{n['name']}"
+            if key in self._removed:
+                continue                       # 用户手动删除过 → 刷新不复活
             raw = {k: v for k, v in n.items()}
             raw["name"] = key          # 内联进 mihomo 的名字用限定名
             fresh.append({"key": key, "source": source, "name": n["name"],
                           "type": n["type"], "server": n["server"], "port": n["port"],
+                          "enabled": key not in self._disabled,
                           "raw": raw})
         self._nodes = [n for n in self._nodes if n.get("source") != source] + fresh
         self._nodes.sort(key=lambda n: n["key"])
@@ -582,11 +607,94 @@ class MihomoBridge:
         with self._lock:
             return [{"key": n["key"], "name": n["name"], "type": n["type"],
                      "server": n["server"], "port": n["port"],
+                     "enabled": n.get("enabled", True),
                      "source": ("订阅" if n["source"] != "link" else
                                 next((s["name"] for s in self._subscriptions
                                       if s["id"] == n["source"]), "链接导入")),
-                     "direct_port": self._port_map.get(n["key"])}
+                     "source_id": n["source"],
+                     "direct_port": self._port_map.get(n["key"]),
+                     "delay_ms": (self._delays.get(n["key"]) or {}).get("delay_ms"),
+                     "delay_at": (self._delays.get(n["key"]) or {}).get("at"),
+                     "delay_error": (self._delays.get(n["key"]) or {}).get("error", "")}
                     for n in self._nodes]
+
+    def enabled_node_keys(self) -> list[str]:
+        with self._lock:
+            return [n["key"] for n in self._nodes if n.get("enabled", True)]
+
+    # ---------- 节点批量操作 ----------
+    def set_nodes_enabled(self, keys: list[str], enabled: bool) -> dict:
+        changed, skipped = [], []
+        with self._lock:
+            known = {n["key"] for n in self._nodes}
+            for key in keys:
+                if key not in known:
+                    skipped.append(key)
+                    continue
+                if enabled:
+                    self._disabled.discard(key)
+                else:
+                    self._disabled.add(key)
+                for n in self._nodes:
+                    if n["key"] == key:
+                        n["enabled"] = enabled
+                if not enabled:
+                    self._port_map.pop(key, None)   # 停用 → 释放直出端口
+                changed.append(key)
+            self._save()
+        return {"changed": changed, "skipped": skipped}
+
+    def remove_nodes(self, keys: list[str]) -> dict:
+        """删除节点（订阅节点加墓碑，刷新后不复活）。"""
+        removed, skipped = [], []
+        with self._lock:
+            known = {n["key"] for n in self._nodes}
+            for key in keys:
+                if key not in known:
+                    skipped.append(key)
+                    continue
+                self._removed.add(key)
+                self._port_map.pop(key, None)
+                self._delays.pop(key, None)
+                for pid, ch in list(self._chains.items()):
+                    if ch.get("flight") == key:
+                        self._chains.pop(pid, None)
+                        self._port_map.pop("chain::" + pid, None)
+                self._nodes = [n for n in self._nodes if n["key"] != key]
+                removed.append(key)
+            self._save()
+        return {"removed": removed, "skipped": skipped}
+
+    def test_nodes(self, keys: list[str]) -> dict:
+        """通过 mihomo 控制 API 批量测延迟（/proxies/{name}/delay）。
+        返回每条结果；桥未运行时整体报错，避免"全都失败"被误读成节点坏了。"""
+        if not self.is_running():
+            return {"ok": False, "error": "桥未运行：请先在状态卡启用桥接再测试节点", "results": []}
+        targets = [k for k in keys if any(n["key"] == k for n in self._nodes)]
+        results = []
+
+        def probe(key: str) -> dict:
+            try:
+                r = requests.get(
+                    f"http://127.0.0.1:{self._api_port}/proxies/{requests.utils.quote(key, safe='')}/delay",
+                    params={"url": "https://www.gstatic.com/generate_204", "timeout": 5000},
+                    headers={"Authorization": "Bearer " + self._api_secret},
+                    timeout=8)
+                data = r.json() if r.content else {}
+                if r.status_code >= 400 or not (data.get("delay") or 0) > 0:
+                    raise ValueError(data.get("message") or f"HTTP {r.status_code}")
+                return {"key": key, "ok": True, "delay_ms": int(data["delay"]), "error": ""}
+            except Exception as exc:  # noqa: BLE001
+                return {"key": key, "ok": False, "delay_ms": None, "error": str(exc)[:160]}
+
+        with _thread_pool(8) as pool:
+            results = list(pool.map(probe, targets))
+        with self._lock:
+            now = int(time.time())
+            for res in results:
+                self._delays[res["key"]] = {"delay_ms": res.get("delay_ms"),
+                                            "error": res.get("error", ""), "at": now}
+        return {"ok": True, "results": results}
 
     def list_subscriptions(self) -> list[dict]:
         with self._lock:
@@ -652,8 +760,11 @@ class MihomoBridge:
     def register_direct(self, node_key: str) -> int | None:
         """直出：为飞行节点分配本地监听端口（导入池时调用）。"""
         with self._lock:
-            if not any(n["key"] == node_key for n in self._nodes):
+            node = next((n for n in self._nodes if n["key"] == node_key), None)
+            if not node:
                 return None
+            if not node.get("enabled", True):
+                return None       # 停用节点不开监听
             return self._alloc_port(node_key)
 
     def _gc_ports(self):
@@ -664,8 +775,9 @@ class MihomoBridge:
         """生成 runtime.yaml。chain_entries: [{pid, flight, config(池代理 dict)}]。
         返回 (yaml 字节, 本次 API secret)。"""
         with self._lock:
-            flight_names = [n["key"] for n in self._nodes]
-            proxies: list[dict] = [dict(n["raw"]) for n in self._nodes]
+            active = [n for n in self._nodes if n.get("enabled", True)]
+            flight_names = [n["key"] for n in active]
+            proxies: list[dict] = [dict(n["raw"]) for n in active]
             listeners: list[dict] = []
             used_ports: set[int] = set()
 
@@ -703,7 +815,7 @@ class MihomoBridge:
                                   "listen": "127.0.0.1", "port": lport, "udp": True,
                                   "proxy": name})
             # 直出节点：池条目已指向 127.0.0.1:port 的节点监听
-            for n in self._nodes:
+            for n in active:
                 if n["key"] in self._port_map:
                     lport = self._port_map[n["key"]]
                     if lport in used_ports:

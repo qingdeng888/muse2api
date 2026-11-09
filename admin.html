@@ -746,8 +746,20 @@ details.raw pre{margin-top:6px}
           <button class="ghost" type="button" onclick="refreshMihomo()">↻ 刷新</button>
         </div>
         <p class="hint" data-i18n="mh-nodes-hint">「导入代理池」= 节点<b>直出</b>：为本节点分配一个本地 SOCKS 端口并创建代理池条目，绑定/轮询/故障转移与普通池代理完全一致。链式封装请到下方「链式封装」区。</p>
+        <div class="bulk-bar" id="mhNodeBulkBar">
+          <span class="eyebrow"><span data-i18n="selected-unit">已选</span> <span id="mhNodeSelCount">0</span></span>
+          <button class="ghost mini" type="button" id="mhNodeBulkTest" onclick="mihomoTestSelectedNodes(this)" disabled>🧪 <span data-i18n="bulk-test">测试选中</span></button>
+          <button class="ghost mini" type="button" id="mhNodeBulkEnable" onclick="mihomoSetSelectedNodesEnabled(true, this)" disabled>✓ <span data-i18n="bulk-enable">启用选中</span></button>
+          <button class="ghost mini" type="button" id="mhNodeBulkDisable" onclick="mihomoSetSelectedNodesEnabled(false, this)" disabled>⏸ <span data-i18n="bulk-disable">停用选中</span></button>
+          <button class="danger mini" type="button" id="mhNodeBulkDelete" onclick="mihomoDeleteSelectedNodes(this)" disabled>🗑 <span data-i18n="bulk-delete">删除选中</span></button>
+          <button class="ghost mini" type="button" onclick="clearMhNodeSelection()">✕ <span data-i18n="bulk-clear">取消选择</span></button>
+          <span class="sub-line" id="mhNodeBulkProgress" role="status" aria-live="polite"></span>
+        </div>
         <div class="tblwrap"><table class="table">
-          <thead><tr><th>节点</th><th>协议</th><th>服务器</th><th>来源</th><th>直出端口</th><th>操作</th></tr></thead>
+          <thead><tr>
+            <th class="th-check"><input type="checkbox" id="mhNodeSelectAll" aria-label="全选" onchange="toggleMhNodeSelectAll()"></th>
+            <th>节点</th><th>协议</th><th>服务器</th><th>来源</th><th>状态</th><th>延迟</th><th>直出端口</th><th>操作</th>
+          </tr></thead>
           <tbody id="mhNodeBody"></tbody>
         </table></div>
       </div>
@@ -1865,6 +1877,15 @@ const I18N_EN_HTML = {
   "已创建池条目（本地端口 X）": "Pool entry created (local port X)",
   "该节点的池条目已存在": "A pool entry for this node already exists",
   "桥接已开启，配置应用中…": "Bridge enabled; applying configuration…", "桥接已关闭": "Bridge disabled",
+  /* ---- 飞行节点批量 ---- */
+  "启用中": "Enabled", "失败": "Failed", "选择该节点": "Select this node",
+  "已启用 X 个节点": "Enabled X node(s)",
+  "已停用 X 个节点（不参与轮询与自动选优）": "Disabled X node(s) (excluded from rotation and auto-select)",
+  "节点已启用": "Node enabled", "节点已停用": "Node disabled",
+  "节点测试完成：X 个可用": "Node test finished: X usable",
+  "节点测试完成：X 个可用，Y 个失败": "Node test finished: X usable, Y failed",
+  "桥未运行：请先在状态卡启用桥接再测试节点": "Bridge is not running: enable it in the status card before testing nodes",
+  "请先选择节点": "Select nodes first",
 };
 /* 含变量的文案：[正则源码, 替换串]，按顺序匹配整段文本（移植自旧版，服务端消息不变） */
 const I18N_EN_PATTERNS = ([
@@ -2001,6 +2022,15 @@ const I18N_EN_PATTERNS = ([
   ["飞行节点不存在或已被订阅刷新移除", "The flight node does not exist or was removed by a subscription refresh"],
   ["删除订阅会同时移除它导入的飞行节点（已直出的池条目将失效）。", "Deleting a subscription also removes its flight nodes (direct-egress pool entries will stop working)."],
   ["下载失败：(.*)", "Download failed: $1"],
+  /* ---- 飞行节点批量 ---- */
+  ["确定删除选中的 (\\d+) 个飞行节点？订阅刷新不会恢复它们，已直出的池条目将失效。", "Delete the $1 selected flight node(s)? Subscription refreshes will not restore them, and existing direct-egress pool entries will stop working."],
+  ["已删除 (\\d+) 个节点", "Deleted $1 node(s)"],
+  ["已启用 (\\d+) 个节点", "Enabled $1 node(s)"],
+  ["已停用 (\\d+) 个节点（不参与轮询与自动选优）", "Disabled $1 node(s) (excluded from rotation and auto-select)"],
+  ["节点测试完成：(\\d+) 个可用，(\\d+) 个失败", "Node test finished: $1 usable, $2 failed"],
+  ["节点测试完成：(\\d+) 个可用", "Node test finished: $1 usable"],
+  ["桥未运行：请先在状态卡启用桥接再测试节点", "The bridge is not running: enable it in the status card before testing nodes"],
+  ["请先选择节点", "Select nodes first"],
   ["任务异常: (.*)", "Task error: $1"],
   ["生成失败: (.*)", "Generation failed: $1"],
   ["助手超时: (.*)", "Assistant timeout: $1"],
@@ -2988,25 +3018,143 @@ function renderMihomoNodes(){
   const tb = $('mhNodeBody');
   if (!tb) return;
   $('mhNodeCount').textContent = mhNodes.length;
+  pruneMhNodeSelection();
+  updateMhNodeSelectionUI();
   if (!mhNodes.length){
-    tb.innerHTML = `<tr><td colspan="6" class="empty">${esc(t('没有飞行节点。添加订阅或导入分享链接'))}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="9" class="empty">${esc(t('没有飞行节点。添加订阅或导入分享链接'))}</td></tr>`;
     return;
   }
   tb.innerHTML = mhNodes.map(n => {
     const direct = n.direct_port
       ? `<span class="badge ok">${n.direct_port}</span>`
       : '<span class="badge mute">—</span>';
-    return `<tr>
+    const state = n.enabled === false
+      ? `<span class="badge mute">${esc(t('已停用'))}</span>`
+      : `<span class="badge ok">${esc(t('启用中'))}</span>`;
+    const delay = n.delay_ms != null
+      ? `<span class="badge ${n.delay_ms < 400 ? 'ok' : n.delay_ms < 900 ? 'warn' : 'bad'}">${n.delay_ms} ms</span>`
+      : (n.delay_error ? `<span class="badge bad" title="${esc(n.delay_error)}">${esc(t('失败'))}</span>` : '<span class="badge mute">—</span>');
+    const isSel = _mhNodeSel.has(n.key);
+    return `<tr data-nkey="${esc(n.key)}" class="${isSel ? 'px-selected' : ''}${n.enabled === false ? ' row-dim' : ''}">
+      <td class="td-check"><input type="checkbox" class="mh-node-check" ${isSel ? 'checked' : ''} onchange="toggleMhNodeSelect('${esc(n.key)}')" aria-label="${esc(t('选择该节点'))}"></td>
       <td><b>${esc(n.name)}</b></td>
       <td><span class="badge info">${esc(n.type)}</span></td>
-      <td class="mono ellip" style="max-width:220px" title="${esc(n.server)}">${esc(n.server)}:${n.port}</td>
+      <td class="mono ellip" style="max-width:200px" title="${esc(n.server)}">${esc(n.server)}:${n.port}</td>
       <td>${esc(n.source)}</td>
+      <td>${state}</td>
+      <td>${delay}</td>
       <td>${direct}</td>
       <td><div class="acts">
-        <button class="ghost mini" onclick="mihomoDirectImport('${esc(n.key)}')">${n.direct_port ? esc(t('重建池条目')) : esc(t('导入代理池'))}</button>
+        <button class="ghost mini" onclick="mihomoDirectImport('${esc(n.key)}')" ${n.enabled === false ? 'disabled' : ''}>${n.direct_port ? esc(t('重建池条目')) : esc(t('导入代理池'))}</button>
+        <button class="ghost mini" onclick="mihomoToggleNode('${esc(n.key)}', ${n.enabled === false})">${esc(n.enabled === false ? t('启用') : t('停用'))}</button>
       </div></td>
     </tr>`;
   }).join('');
+}
+
+/* --- 飞行节点多选与批量操作 --- */
+let _mhNodeSel = new Set();
+let _mhNodeBusy = false;
+
+function pruneMhNodeSelection(){
+  const valid = new Set(mhNodes.map(n => n.key));
+  for (const k of Array.from(_mhNodeSel)) if (!valid.has(k)) _mhNodeSel.delete(k);
+}
+function clearMhNodeSelection(){ _mhNodeSel.clear(); updateMhNodeSelectionUI(); }
+function toggleMhNodeSelect(key){
+  _mhNodeSel.has(key) ? _mhNodeSel.delete(key) : _mhNodeSel.add(key);
+  updateMhNodeSelectionUI();
+}
+function toggleMhNodeSelectAll(){
+  if (!mhNodes.length) return;
+  if (_mhNodeSel.size === mhNodes.length) _mhNodeSel.clear();
+  else _mhNodeSel = new Set(mhNodes.map(n => n.key));
+  updateMhNodeSelectionUI();
+}
+function updateMhNodeSelectionUI(){
+  pruneMhNodeSelection();
+  const n = _mhNodeSel.size;
+  if ($('mhNodeSelCount')) $('mhNodeSelCount').textContent = n;
+  for (const id of ['mhNodeBulkTest', 'mhNodeBulkEnable', 'mhNodeBulkDisable', 'mhNodeBulkDelete']){
+    const b = $(id);
+    if (b) b.disabled = _mhNodeBusy || !n;
+  }
+  const all = $('mhNodeSelectAll');
+  if (all){
+    all.checked = mhNodes.length > 0 && n === mhNodes.length;
+    all.indeterminate = n > 0 && n < mhNodes.length;
+  }
+  document.querySelectorAll('#mhNodeBody tr[data-nkey]').forEach(tr => {
+    const key = tr.getAttribute('data-nkey');
+    const on = _mhNodeSel.has(key);
+    const chk = tr.querySelector('.mh-node-check');
+    if (chk) chk.checked = on;
+    tr.classList.toggle('px-selected', on);
+  });
+}
+
+async function runMhNodeBulk(btn, label, fn){
+  if (_mhNodeBusy || !_mhNodeSel.size) return;
+  _mhNodeBusy = true;
+  updateMhNodeSelectionUI();
+  if (btn) btn.disabled = true;
+  const prog = $('mhNodeBulkProgress');
+  try{ await fn(prog); }
+  catch(e){ toast(label + '失败：' + e.message, 'bad'); }
+  finally{
+    _mhNodeBusy = false;
+    if (prog) prog.textContent = '';
+    await refreshMihomo();
+    updateMhNodeSelectionUI();
+  }
+}
+
+async function mihomoTestSelectedNodes(btn){
+  if (!mhStatus || !mhStatus.running){
+    return toast('桥未运行：请先在状态卡启用桥接再测试节点', 'warn');
+  }
+  await runMhNodeBulk(btn, '批量测试', async (prog) => {
+    const keys = Array.from(_mhNodeSel);
+    if (prog) prog.textContent = t('测试中 X / Y…').replace('X', keys.length).replace('Y', keys.length);
+    const r = await api('/admin/mihomo/nodes/test', {method:'POST', body: JSON.stringify({keys})});
+    const okN = (r.results || []).filter(x => x.ok).length;
+    const badN = (r.results || []).length - okN;
+    toast(`节点测试完成：${okN} 个可用${badN ? `，${badN} 个失败` : ''}`, badN ? 'warn' : 'ok');
+  });
+}
+
+async function mihomoSetSelectedNodesEnabled(enabled, btn){
+  await runMhNodeBulk(btn, enabled ? '批量启用' : '批量停用', async () => {
+    const keys = Array.from(_mhNodeSel);
+    const r = await api('/admin/mihomo/nodes/enabled', {method:'POST',
+      body: JSON.stringify({keys, enabled})});
+    const n = (r.changed || []).length;
+    toast(enabled ? `已启用 ${n} 个节点` : `已停用 ${n} 个节点（不参与轮询与自动选优）`, 'ok');
+    if ((r.skipped || []).length) console.warn('skipped:', r.skipped);
+  });
+}
+
+async function mihomoDeleteSelectedNodes(btn){
+  const n = _mhNodeSel.size;
+  if (!n) return;
+  if (!confirm(t(`确定删除选中的 ${n} 个飞行节点？订阅刷新不会恢复它们，已直出的池条目将失效。`))) return;
+  await runMhNodeBulk(btn, '批量删除', async () => {
+    const keys = Array.from(_mhNodeSel);
+    const r = await api('/admin/mihomo/nodes/remove', {method:'POST', body: JSON.stringify({keys})});
+    _mhNodeSel.clear();
+    toast(`已删除 ${(r.removed || []).length} 个节点`, 'ok');
+    poolRows = r.proxies || poolRows;
+  });
+}
+
+async function mihomoToggleNode(key, enable){
+  try{
+    const r = await api('/admin/mihomo/nodes/enabled', {method:'POST',
+      body: JSON.stringify({keys: [key], enabled: enable})});
+    toast(enable ? '节点已启用' : '节点已停用', 'ok');
+    mhNodes = r.nodes || mhNodes;
+    renderMihomoNodes();
+  }catch(e){ toast('操作失败：' + e.message, 'bad'); }
 }
 
 function renderMihomoChains(){

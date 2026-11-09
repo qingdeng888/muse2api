@@ -764,6 +764,11 @@ class MihomoChainRequest(BaseModel):
     flight: str | None = None      # 'AUTO' | 飞行节点 key | None=关闭桥接
 
 
+class MihomoNodeKeysRequest(BaseModel):
+    keys: list[str] = []
+    enabled: bool | None = None    # 仅 enabled 端点使用
+
+
 # ------------------------- 提示词构造 -------------------------
 def _image_value(value: Any) -> str | None:
     if isinstance(value, str):
@@ -2447,6 +2452,37 @@ def mihomo_set_chain(pid: str, req: MihomoChainRequest, _=Depends(auth)):
         raise HTTPException(400, err)
     BRIDGE.request_apply()
     return {"ok": True, "chain": res, "proxies": _proxy_view_rows()}
+
+
+@app.post("/admin/mihomo/nodes/enabled")
+def mihomo_nodes_enabled(req: MihomoNodeKeysRequest, _=Depends(auth)):
+    if not req.keys:
+        raise HTTPException(400, "请先选择节点")
+    enabled = bool(req.enabled)
+    res = BRIDGE.set_nodes_enabled(req.keys, enabled)
+    BRIDGE.request_apply()
+    return {"ok": True, **res, "nodes": BRIDGE.list_nodes(),
+            "proxies": _proxy_view_rows()}
+
+
+@app.post("/admin/mihomo/nodes/remove")
+def mihomo_nodes_remove(req: MihomoNodeKeysRequest, _=Depends(auth)):
+    if not req.keys:
+        raise HTTPException(400, "请先选择节点")
+    res = BRIDGE.remove_nodes(req.keys)
+    BRIDGE.request_apply()
+    return {"ok": True, **res, "nodes": BRIDGE.list_nodes(),
+            "proxies": _proxy_view_rows()}
+
+
+@app.post("/admin/mihomo/nodes/test")
+def mihomo_nodes_test(req: MihomoNodeKeysRequest, _=Depends(auth)):
+    if not req.keys:
+        raise HTTPException(400, "请先选择节点")
+    res = BRIDGE.test_nodes(req.keys)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "节点测试失败")
+    return {"ok": True, **res, "nodes": BRIDGE.list_nodes()}
 
 
 def _proxy_health_loop():

@@ -56,7 +56,10 @@ class Handler(BaseHTTPRequestHandler):
    data={'enabled':False,'running':False,'pid':0,'last_error':'','binary_found':False,'binary_path':'',
          'download':{'state':'idle','percent':0,'error':''},'base_port':10801,'api_port':19090,
          'nodes':0,'subscriptions':0,'subscription_list':[],'chains':{},'port_map':{},'work_dir':'/tmp/mihomo'};kind='application/json'
-  elif path=='/admin/mihomo/nodes':data={'nodes':[],'auto_group':'BRIDGE-AUTO'};kind='application/json'
+  elif path=='/admin/mihomo/nodes':
+   data={'nodes':[{'key':'link::FixtureNode','name':'FixtureNode','type':'vless','server':'203.0.113.1',
+                   'port':443,'source':'链接导入','source_id':'link','enabled':True,'direct_port':None,
+                   'delay_ms':None,'delay_at':None,'delay_error':''}],'auto_group':'BRIDGE-AUTO'};kind='application/json'
   elif path=='/admin/apikey':data={'api_key':'fixture-only'};kind='application/json'
   elif path in ['/admin/update/check','/admin/repo/status']:
    data={'local_version':VERSION,'remote_version':VERSION,'local_sha':'fixture','remote_sha':'fixture','up_to_date':True,'has_update':False,'recent_commits':[]};kind='application/json'
@@ -136,6 +139,12 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cl
    wait("$('mhFacts').children.length>0")
    assert page.js("$('mhNodeBody').children.length===1 && $('mhSubBody').children.length===1")
    assert page.js("$('mhRunBadge').textContent.length>0 && document.querySelectorAll('#mhChainBody tr').length>=1")
+   # 飞行节点多选：全选 → 批量按钮可用 → 取消选择
+   page.js("$('mhNodeSelectAll').click()")
+   assert page.js("$('mhNodeSelCount').textContent==='1' && !$('mhNodeBulkEnable').disabled && !$('mhNodeBulkDisable').disabled && !$('mhNodeBulkDelete').disabled && !$('mhNodeBulkTest').disabled")
+   assert page.js("document.querySelector('#mhNodeBody tr[data-nkey]').classList.contains('px-selected')")
+   page.js("clearMhNodeSelection()")
+   assert page.js("$('mhNodeSelCount').textContent==='0' && $('mhNodeBulkDelete').disabled")
   if not args.probe_only:
    assert not page.js('window.__errors')
    print('PASS: full-width layout, desktop controls, contained mobile scrolling, Chinese/English and test-without-saving')

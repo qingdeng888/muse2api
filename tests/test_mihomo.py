@@ -155,10 +155,50 @@ def test_chain_off_and_gc():
     print("PASS: chain off releases port")
 
 
+def test_node_bulk_state():
+    b = _fresh_bridge()
+    b.import_links("vless://u@5.5.5.5:443#A\nvless://u@6.6.6.6:443#B\nvless://u@7.7.7.7:443#C")
+    keys = sorted(n["key"] for n in b.list_nodes())
+    assert len(keys) == 3
+    # 停用两个：不再进 runtime.yaml
+    res = b.set_nodes_enabled(keys[:2], False)
+    assert len(res["changed"]) == 2
+    assert b.enabled_node_keys() == [keys[2]]
+    body, _ = b.build_yaml([])
+    doc = __import__("yaml").safe_load(body)
+    names = [p["name"] for p in doc["proxies"]]
+    assert names == [keys[2]], names
+    # 停用节点不会分配直出端口
+    assert b.register_direct(keys[0]) is None
+    # 重新启用
+    b.set_nodes_enabled([keys[0]], True)
+    assert b.register_direct(keys[0]) is not None
+    # 删除：加墓碑，重新导入不复活
+    b.remove_nodes([keys[1]])
+    assert keys[1] not in [n["key"] for n in b.list_nodes()]
+    b._upsert_nodes("link", parse_share_links("vless://u@6.6.6.6:443#B"))
+    assert keys[1] not in [n["key"] for n in b.list_nodes()], "墓碑应阻止订阅刷新复活已删节点"
+    # 删除节点会同时摘掉引用它的链式
+    b.set_chain("pid1", keys[2], {"id": "pid1", "server": "http://1.1.1.1:80"})
+    b.remove_nodes([keys[2]])
+    assert b.chain_info("pid1") is None
+    print("PASS: node bulk enable/disable/remove + tombstones + chain cleanup")
+
+
+def test_node_test_requires_bridge():
+    b = _fresh_bridge()
+    b.import_links("vless://u@8.8.8.8:443#T")
+    res = b.test_nodes([n["key"] for n in b.list_nodes()])
+    assert res["ok"] is False and "桥未运行" in res["error"]
+    print("PASS: node test refuses when bridge down (no false negatives)")
+
+
 if __name__ == "__main__":
     test_share_link_parsers()
     test_subscription_payload_forms()
     test_bridge_state_and_ports()
     test_build_yaml_structure()
     test_chain_off_and_gc()
+    test_node_bulk_state()
+    test_node_test_requires_bridge()
     print("ALL MIHOMO TESTS PASSED")
