@@ -247,6 +247,17 @@ table{width:100%;border-collapse:collapse;font-size:12.5px}
 #poolBody .proxy-summary{display:block;max-width:100%;overflow-wrap:anywhere}
 .empty{padding:26px 14px;text-align:center;color:var(--text3);font-size:12.5px}
 .row-dim td{opacity:.5}
+/* ---------- 代理池批量操作 ---------- */
+.bulk-bar{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--input-bg);padding:8px 12px;margin-bottom:10px;
+}
+.bulk-bar .eyebrow{color:var(--accent);letter-spacing:.1em}
+.bulk-bar .sub-line{flex:1;text-align:right;min-width:120px;color:var(--text2)}
+.th-check{width:34px}
+.th-check input,.px-check{width:14px;height:14px;accent-color:var(--accent);cursor:pointer;display:block}
+tr.px-selected td{background:rgba(34,211,238,.06)}
 /* 中等宽度下收紧表格内边距：英文模式的行内操作按钮更长，避免横向溢出 */
 @media (max-width:1440px){
   .table th{padding:10px 8px}
@@ -664,8 +675,18 @@ details.raw pre{margin-top:6px}
           遇错自动转移到池内健康代理、恢复后自动<b>回切</b>。<b>轮询</b>模式每次任务自动选用下一个健康代理；
           删除已被绑定的代理时，其账号会自动转为轮询。
         </p>
+        <div class="bulk-bar" id="pxBulkBar">
+          <span class="eyebrow"><span data-i18n="selected-unit">已选</span> <span id="pxBulkCount">0</span></span>
+          <button class="ghost mini" type="button" id="pxBulkTest" onclick="testSelectedProxies(this)" disabled>🧪 <span data-i18n="bulk-test">测试选中</span></button>
+          <button class="ghost mini" type="button" id="pxBulkEnable" onclick="setSelectedProxiesEnabled(true, this)" disabled>✓ <span data-i18n="bulk-enable">启用选中</span></button>
+          <button class="ghost mini" type="button" id="pxBulkDisable" onclick="setSelectedProxiesEnabled(false, this)" disabled>⏸ <span data-i18n="bulk-disable">停用选中</span></button>
+          <button class="danger mini" type="button" id="pxBulkDelete" onclick="deleteSelectedProxies(this)" disabled>🗑 <span data-i18n="bulk-delete">删除选中</span></button>
+          <button class="ghost mini" type="button" onclick="clearPxSelection()">✕ <span data-i18n="bulk-clear">取消选择</span></button>
+          <span class="sub-line" id="pxBulkProgress" role="status" aria-live="polite"></span>
+        </div>
         <div class="tblwrap"><table class="table">
           <thead><tr>
+            <th class="th-check"><input type="checkbox" id="pxSelectAll" aria-label="全选" onchange="togglePxSelectAll()"></th>
             <th>代理地址</th><th>状态</th><th>延迟</th><th>出口 IP</th><th>最近检测</th><th>绑定</th><th>启用</th><th>操作</th>
           </tr></thead>
           <tbody id="pxBody"></tbody>
@@ -1732,6 +1753,11 @@ const I18N_EN_HTML = {
   "proxy-rotate-hint": "Every generation task picks the next healthy proxy from the pool. If every proxy is unhealthy the task fails visibly — never a silent direct connection.",
   "proxy-busy-hint": "Do not change the proxy while the account is running a task. The new setting applies from the next request.",
   "pool-empty-hint": "No suitable proxy? Add and enable some on the \"Proxy Pool\" page first.",
+  /* ---- 代理池批量操作 ---- */
+  "selected-unit": "selected",
+  "bulk-test": "Test selected", "bulk-enable": "Enable selected", "bulk-disable": "Disable selected",
+  "bulk-delete": "Delete selected", "bulk-clear": "Clear selection",
+  "选择该代理": "Select this proxy",
 };
 /* 含变量的文案：[正则源码, 替换串]，按顺序匹配整段文本（移植自旧版，服务端消息不变） */
 const I18N_EN_PATTERNS = ([
@@ -1836,6 +1862,20 @@ const I18N_EN_PATTERNS = ([
   ["检测完成：(\\d+) 个健康", "Check finished: $1 healthy"],
   ["✓ 出口 (.*) · (\\d+) ms", "✓ Egress $1 · $2 ms"],
   ["代理出口检测失败：(.*)", "Proxy egress check failed: $1"],
+  /* ---- 代理池批量操作 ---- */
+  ["测试中 (\\d+) / (\\d+)…", "Testing $1 / $2…"],
+  ["已触发测试限流，剩余 (\\d+) 个未测", "Rate limit hit; $1 left untested"],
+  ["批量测试完成：(\\d+) 个健康，(\\d+) 个异常", "Bulk test finished: $1 healthy, $2 error"],
+  ["批量测试完成：(\\d+) 个健康", "Bulk test finished: $1 healthy"],
+  ["已启用 (\\d+) 个代理", "Enabled $1 prox(y|ies)"],
+  ["已停用 (\\d+) 个代理（绑定的账号将自动避开）", "Disabled $1 prox(y|ies) (bound accounts will avoid them automatically)"],
+  ["已删除 (\\d+) 个代理，(\\d+) 个账号已自动转为轮询", "Deleted $1 prox(y|ies); $2 account(s) switched to rotation automatically"],
+  ["已删除 (\\d+) 个代理", "Deleted $1 prox(y|ies)"],
+  ["确定删除选中的 (\\d+) 个代理？绑定它们的账号会自动转为「轮询代理池」。", "Delete the $1 selected prox(y|ies)? Their bound accounts will switch to pool rotation automatically."],
+  ["批量测试失败：(.*)", "Bulk test failed: $1"],
+  ["批量启用失败：(.*)", "Bulk enable failed: $1"],
+  ["批量停用失败：(.*)", "Bulk disable failed: $1"],
+  ["批量删除失败：(.*)", "Bulk delete failed: $1"],
   ["任务异常: (.*)", "Task error: $1"],
   ["生成失败: (.*)", "Generation failed: $1"],
   ["助手超时: (.*)", "Assistant timeout: $1"],
@@ -2481,6 +2521,128 @@ async function refreshProxyPage(){
   renderProxyPage();
 }
 
+/* --- 多选与批量操作 --- */
+let _pxSelected = new Set();
+let _pxBulkBusy = false;
+
+function prunePxSelection(){
+  const valid = new Set(poolRows.map(p => p.id));
+  for (const pid of Array.from(_pxSelected)){
+    if (!valid.has(pid)) _pxSelected.delete(pid);
+  }
+}
+function clearPxSelection(){
+  _pxSelected.clear();
+  updatePxSelectionUI();
+}
+function togglePxSelect(pid){
+  _pxSelected.has(pid) ? _pxSelected.delete(pid) : _pxSelected.add(pid);
+  updatePxSelectionUI();
+}
+function togglePxSelectAll(){
+  if (!poolRows.length) return;
+  if (_pxSelected.size === poolRows.length) _pxSelected.clear();
+  else _pxSelected = new Set(poolRows.map(p => p.id));
+  updatePxSelectionUI();
+}
+function updatePxSelectionUI(){
+  prunePxSelection();
+  const n = _pxSelected.size;
+  const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  set('pxBulkCount', n);
+  for (const id of ['pxBulkTest', 'pxBulkEnable', 'pxBulkDisable', 'pxBulkDelete']){
+    const b = $(id);
+    if (b) b.disabled = _pxBulkBusy || !n;
+  }
+  const all = $('pxSelectAll');
+  if (all){
+    all.checked = poolRows.length > 0 && n === poolRows.length;
+    all.indeterminate = n > 0 && n < poolRows.length;
+  }
+  document.querySelectorAll('#pxBody tr[data-pid]').forEach(tr => {
+    const pid = tr.getAttribute('data-pid');
+    const chk = tr.querySelector('.px-check');
+    const on = _pxSelected.has(pid);
+    if (chk) chk.checked = on;
+    tr.classList.toggle('px-selected', on);
+  });
+}
+
+async function runPxBulk(btn, label, fn){
+  if (_pxBulkBusy || !_pxSelected.size) return;
+  _pxBulkBusy = true;
+  updatePxSelectionUI();
+  if (btn) btn.disabled = true;
+  const prog = $('pxBulkProgress');
+  try{ await fn(prog); }
+  catch(e){ toast(label + '失败：' + e.message, 'bad'); }
+  finally{
+    _pxBulkBusy = false;
+    if (prog) prog.textContent = '';
+    await loadProxies(true);
+    renderProxyPage();
+    updatePxSelectionUI();
+    loadPool();
+  }
+}
+
+async function testSelectedProxies(btn){
+  await runPxBulk(btn, '批量测试', async (prog) => {
+    const ids = Array.from(_pxSelected);
+    let okN = 0, badN = 0;
+    for (let i = 0; i < ids.length; i++){
+      if (prog) prog.textContent = t('测试中 X / Y…').replace('X', i + 1).replace('Y', ids.length);
+      try{
+        const r = await api(`/admin/proxies/${ids[i]}/test`, {method:'POST'});
+        r.ok ? okN++ : badN++;
+        // 触发服务端限流时提前结束批量（对齐 opencode2api 的保护策略）
+        if (!r.ok && /429|too many|限流|rate_limited/i.test(r.error || '')){
+          if (prog) prog.textContent = t('已触发测试限流，剩余 N 个未测').replace('N', ids.length - i - 1);
+          break;
+        }
+      }catch(e){
+        badN++;
+        if (/429|too many|限流|rate_limited/i.test(e.message || '')) break;
+      }
+    }
+    toast(`批量测试完成：${okN} 个健康${badN ? `，${badN} 个异常` : ''}`, badN ? 'warn' : 'ok');
+  });
+}
+
+async function setSelectedProxiesEnabled(enabled, btn){
+  await runPxBulk(btn, enabled ? '批量启用' : '批量停用', async () => {
+    const ids = Array.from(_pxSelected);
+    let changed = 0;
+    for (const pid of ids){
+      try{
+        await api(`/admin/proxies/${pid}`, {method:'PATCH', body: JSON.stringify({enabled})});
+        changed++;
+      }catch(e){ /* 单条失败不中断批次 */ }
+    }
+    toast(enabled ? `已启用 ${changed} 个代理` : `已停用 ${changed} 个代理（绑定的账号将自动避开）`, 'ok');
+  });
+}
+
+async function deleteSelectedProxies(btn){
+  const n = _pxSelected.size;
+  if (!n) return;
+  if (!confirm(t(`确定删除选中的 ${n} 个代理？绑定它们的账号会自动转为「轮询代理池」。`))) return;
+  await runPxBulk(btn, '批量删除', async () => {
+    const ids = Array.from(_pxSelected);
+    let removed = 0, migrated = 0;
+    for (const pid of ids){
+      try{
+        const r = await api(`/admin/proxies/${pid}`, {method:'DELETE'});
+        removed++;
+        migrated += r.migrated || 0;
+      }catch(e){ /* 单条失败不中断批次 */ }
+    }
+    _pxSelected.clear();
+    toast(migrated ? `已删除 ${removed} 个代理，${migrated} 个账号已自动转为轮询`
+                   : `已删除 ${removed} 个代理`, 'ok');
+  });
+}
+
 function renderProxyPage(){
   if (!$('pxBody')) return;
   const rows = poolRows;
@@ -2493,8 +2655,10 @@ function renderProxyPage(){
   set('pxBad', badCount);
   set('pxBound', boundCount);
   set('pxCount', rows.length);
+  prunePxSelection();
+  updatePxSelectionUI();
   if (!rows.length){
-    $('pxBody').innerHTML = `<tr><td colspan="8" class="empty">${esc(t('代理池为空。在上方粘贴代理链接即可添加'))}</td></tr>`;
+    $('pxBody').innerHTML = `<tr><td colspan="9" class="empty">${esc(t('代理池为空。在上方粘贴代理链接即可添加'))}</td></tr>`;
     return;
   }
   $('pxBody').innerHTML = rows.map(p => {
@@ -2508,7 +2672,9 @@ function renderProxyPage(){
     const srv = p.label ? `<b>${esc(p.label)}</b><div class="mono proxy-summary">${esc(p.server)}</div>`
                         : `<b class="mono" style="font-size:12px">${esc(p.server)}</b>`;
     const user = p.username ? `<div class="sub-line">${esc(t('用户'))}: ${esc(p.username)}${p.has_password ? ' / ***' : ''}</div>` : '';
-    return `<tr>
+    const isSel = _pxSelected.has(p.id);
+    return `<tr data-pid="${esc(p.id)}" class="${isSel ? 'px-selected' : ''}">
+      <td class="td-check"><input type="checkbox" class="px-check" ${isSel ? 'checked' : ''} onchange="togglePxSelect('${esc(p.id)}')" aria-label="${esc(t('选择该代理'))}"></td>
       <td>${srv}${user}</td>
       <td>${badge}</td>
       <td class="mono">${latency}</td>
