@@ -1025,10 +1025,14 @@ class MihomoBridge:
                 name = f"chain-{c['pid'][:8]}"
                 entry = {"name": name, "type": "socks5" if u.scheme.startswith("socks") else "http",
                          "server": (u.hostname or "").strip("[]"), "port": port}
-                if u.username:
-                    entry["username"] = unquote(u.username)
-                if u.password:
-                    entry["password"] = unquote(u.password)
+                # 凭据可能内嵌在 URL，也可能是池条目的独立字段（更常见）：
+                # pool 里存的是 {server: http://host:port, username, password}。
+                user = unquote(u.username or "") or (cfg.get("username") or "")
+                pwd = unquote(u.password or "") or (cfg.get("password") or "")
+                if user:
+                    entry["username"] = user
+                if pwd:
+                    entry["password"] = pwd
                 dial = AUTO_GROUP if (not c["flight"] or c["flight"] in ("AUTO", AUTO_GROUP)) else c["flight"]
                 if flight_names:
                     entry["dialer-proxy"] = dial

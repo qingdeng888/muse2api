@@ -275,6 +275,33 @@ def test_timer_settings():
     print("PASS: health/subscription timer settings")
 
 
+
+def test_chain_passes_pool_credentials():
+    """回归：池条目的凭据在独立字段(username/password)而非 URL 里，
+    必须传给 mihomo 链式条目，否则上游报 HTTP need auth / SSL WRONG_VERSION_NUMBER。"""
+    b = _fresh_bridge()
+    b.import_links("hy2://pw@8.8.8.8:36712#Fly")
+    entry = {"pid": "poolx", "flight": AUTO_GROUP,
+             "config": {"server": "http://137.175.78.14:11189",
+                          "username": "myuser", "password": "mypass"}}
+    body, _ = b.build_yaml([entry])
+    doc = __import__("yaml").safe_load(body)
+    ch = next(p for p in doc["proxies"] if p["name"].startswith("chain-"))
+    assert ch.get("username") == "myuser" and ch.get("password") == "mypass",         f"池条目凭据必须传入链式条目，实际 {ch}"
+    # URL 内嵌凭据同样可用（两者取其一）
+    entry2 = {"pid": "pooly", "flight": AUTO_GROUP,
+              "config": {"server": "http://u2:p2@9.9.9.9:8080", "username": "", "password": ""}}
+    body2, _ = b.build_yaml([entry2])
+    ch2 = next(p for p in __import__("yaml").safe_load(body2)["proxies"] if p["name"].startswith("chain-"))
+    assert ch2.get("username") == "u2" and ch2.get("password") == "p2"
+    # 无凭据代理不应凭空造凭据
+    entry3 = {"pid": "poolz", "flight": AUTO_GROUP, "config": {"server": "http://1.2.3.4:80"}}
+    body3, _ = b.build_yaml([entry3])
+    ch3 = next(p for p in __import__("yaml").safe_load(body3)["proxies"] if p["name"].startswith("chain-"))
+    assert "username" not in ch3 and "password" not in ch3
+    print("PASS: chain entries inherit pool credentials (field form and URL form)")
+
+
 if __name__ == "__main__":
     test_share_link_parsers()
     test_subscription_payload_forms()
@@ -285,5 +312,6 @@ if __name__ == "__main__":
     test_node_test_requires_bridge()
     test_health_filtering()
     test_prune_cleans_ports_and_chains()
+    test_chain_passes_pool_credentials()
     test_timer_settings()
     print("ALL MIHOMO TESTS PASSED")
