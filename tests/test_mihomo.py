@@ -193,6 +193,50 @@ def test_node_test_requires_bridge():
     print("PASS: node test refuses when bridge down (no false negatives)")
 
 
+
+def test_health_filtering():
+    b = _fresh_bridge()
+    b.import_links("vless://u@1.1.1.1:443#H1\nvless://u@2.2.2.2:443#H2\nvless://u@3.3.3.3:443#H3")
+    keys = sorted(n["key"] for n in b.list_nodes())
+    # 未测速 = 视为可用（对齐 ds2 unknown 语义）
+    assert all(b.is_usable(k) for k in keys)
+    assert len(b.usable_node_keys()) == 3
+    # 一次失败不够判死（fail_streak 阈值 2）
+    b._health[keys[0]] = {"status": "unknown", "fail_streak": 1, "latency_ms": None, "at": 0, "error": "x"}
+    assert b.is_usable(keys[0])
+    # 第二次失败 → fail，从可用池剔除
+    b._health[keys[0]] = {"status": "fail", "fail_streak": 2, "latency_ms": None, "at": 0, "error": "x"}
+    assert not b.is_usable(keys[0])
+    assert keys[0] not in b.usable_node_keys()
+    # AUTO 组排除 fail，但 proxies 仍保留（直出不断）
+    body, _ = b.build_yaml([])
+    doc = __import__("yaml").safe_load(body)
+    auto = next(g for g in doc["proxy-groups"] if g["name"] == AUTO_GROUP)
+    assert keys[0] not in auto["proxies"] and len(auto["proxies"]) == 2
+    assert keys[0] in [p["name"] for p in doc["proxies"]], "fail 节点仍保留在 proxies，避免直出监听断掉"
+    # 恢复 ok → 回到可用池
+    b._health[keys[0]] = {"status": "ok", "fail_streak": 0, "latency_ms": 120, "at": 0, "error": ""}
+    assert b.is_usable(keys[0])
+    assert b.usable_node_keys()[0] == keys[0], "按延迟升序，ok 的排最前"
+    # 停用节点无论健康与否都不可用
+    b.set_nodes_enabled([keys[1]], False)
+    assert not b.is_usable(keys[1])
+    s = b.health_summary()
+    assert s["total"] == 3 and s["ok"] == 1
+    print("PASS: health filtering (unknown usable / fail excluded after 2 strikes / auto group)")
+
+
+def test_timer_settings():
+    b = _fresh_bridge()
+    assert b.set_health_settings(health_interval_min=15, sub_refresh_hours=6) == ""
+    s = b.health_summary()
+    assert s["interval_min"] == 15 and s["sub_refresh_hours"] == 6
+    # 0 = 关闭自动刷新
+    b.set_health_settings(sub_refresh_hours=0)
+    assert b.health_summary()["sub_refresh_hours"] == 0
+    print("PASS: health/subscription timer settings")
+
+
 if __name__ == "__main__":
     test_share_link_parsers()
     test_subscription_payload_forms()
@@ -201,4 +245,6 @@ if __name__ == "__main__":
     test_chain_off_and_gc()
     test_node_bulk_state()
     test_node_test_requires_bridge()
+    test_health_filtering()
+    test_timer_settings()
     print("ALL MIHOMO TESTS PASSED")

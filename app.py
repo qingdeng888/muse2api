@@ -749,6 +749,8 @@ class MihomoSettingsRequest(BaseModel):
     enabled: bool | None = None
     base_port: int | None = None
     api_port: int | None = None
+    health_interval_min: int | None = None   # 节点健康巡检周期（分钟）
+    sub_refresh_hours: int | None = None     # 订阅自动刷新周期（小时，0=关闭）
 
 
 class MihomoSubRequest(BaseModel):
@@ -2362,8 +2364,29 @@ def mihomo_settings(req: MihomoSettingsRequest, _=Depends(auth)):
     err = BRIDGE.set_settings(enabled=req.enabled, base_port=req.base_port, api_port=req.api_port)
     if err:
         raise HTTPException(400, err)
+    BRIDGE.set_health_settings(health_interval_min=req.health_interval_min,
+                               sub_refresh_hours=req.sub_refresh_hours)
     BRIDGE.request_apply()
     return {"ok": True, "status": BRIDGE.status()}
+
+
+@app.post("/admin/mihomo/health-sweep")
+def mihomo_health_sweep(_=Depends(auth)):
+    """立即巡检：并发测速全部未测/异常节点，失败的从 AUTO 组剔除。"""
+    res = BRIDGE.sweep_health()
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "巡检失败")
+    BRIDGE.request_apply()
+    return {"ok": True, **res, "nodes": BRIDGE.list_nodes(),
+            "health_summary": BRIDGE.health_summary()}
+
+
+@app.post("/admin/mihomo/subscriptions/refresh-all")
+def mihomo_refresh_all_subs(_=Depends(auth)):
+    res = BRIDGE.refresh_all_subscriptions()
+    BRIDGE.request_apply()
+    return {"ok": True, **res, "nodes": BRIDGE.list_nodes(),
+            "status": BRIDGE.status()}
 
 
 @app.post("/admin/mihomo/binary/download")

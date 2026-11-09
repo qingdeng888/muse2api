@@ -35,6 +35,9 @@ import yaml
 
 from config import CFG
 
+import logging
+log = logging.getLogger("muse2api.mihomo")
+
 # ------------------------- 分享链接解析 -------------------------
 
 def _b64_loose(data: str) -> bytes | None:
@@ -439,6 +442,12 @@ class MihomoBridge:
         self._disabled: set[str] = set()      # 用户停用的节点 key
         self._removed: set[str] = set()       # 用户删除的节点 key（刷新不复活）
         self._delays: dict[str, dict] = {}    # 节点延迟测试结果（内存）
+        self._health: dict[str, dict] = {}    # key -> {status: ok|fail|unknown, fail_streak, at}
+        self._health_interval_min = 30        # 节点健康巡检周期（分钟）
+        self._sub_refresh_hours = 0           # 订阅自动刷新周期（小时，0=关闭）
+        self._last_sweep = 0                  # 上次巡检时间戳
+        self._last_sub_refresh = 0            # 上次自动刷新时间戳
+        self._sweeping = False
         self._wake = threading.Event()
         self._load()
 
@@ -456,6 +465,11 @@ class MihomoBridge:
             self._chains = data.get("chains") or {}
             self._disabled = set(data.get("disabled_nodes") or [])
             self._removed = set(data.get("removed_nodes") or [])
+            self._health = data.get("health") or {}
+            self._health_interval_min = max(1, int(data.get("health_interval_min") or 30))
+            self._sub_refresh_hours = max(0, int(data.get("sub_refresh_hours") or 0))
+            self._last_sweep = int(data.get("last_sweep") or 0)
+            self._last_sub_refresh = int(data.get("last_sub_refresh") or 0)
             for n in self._nodes:
                 n.setdefault("enabled", n["key"] not in self._disabled)
         except (OSError, ValueError):
@@ -467,7 +481,12 @@ class MihomoBridge:
                 "api_port": self._api_port, "subscriptions": self._subscriptions,
                 "nodes": self._nodes, "port_map": self._port_map, "chains": self._chains,
                 "disabled_nodes": sorted(self._disabled),
-                "removed_nodes": sorted(self._removed)}
+                "removed_nodes": sorted(self._removed),
+                "health": self._health,
+                "health_interval_min": self._health_interval_min,
+                "sub_refresh_hours": self._sub_refresh_hours,
+                "last_sweep": self._last_sweep,
+                "last_sub_refresh": self._last_sub_refresh}
         tmp = self.state_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -510,6 +529,7 @@ class MihomoBridge:
                 "subscription_list": [dict(s) for s in self._subscriptions],
                 "chains": {k: dict(v) for k, v in self._chains.items()},
                 "port_map": dict(self._port_map),
+                "health_summary": self.health_summary(),
                 "work_dir": self.dir,
             }
         return st
@@ -613,6 +633,9 @@ class MihomoBridge:
                                       if s["id"] == n["source"]), "链接导入")),
                      "source_id": n["source"],
                      "direct_port": self._port_map.get(n["key"]),
+                     "usable": self.is_usable(n["key"]),
+                     "health": (self._health_of(n["key"]).get("status") or "unknown"),
+                     "fail_streak": self._health_of(n["key"]).get("fail_streak", 0),
                      "delay_ms": (self._delays.get(n["key"]) or {}).get("delay_ms"),
                      "delay_at": (self._delays.get(n["key"]) or {}).get("at"),
                      "delay_error": (self._delays.get(n["key"]) or {}).get("error", "")}
@@ -700,7 +723,149 @@ class MihomoBridge:
         with self._lock:
             return [dict(s) for s in self._subscriptions]
 
-    # ---------- 端口分配 / 链式 / 直出 ----------
+    # ---------- 节点健康与自动筛选 ----------
+    def _health_of(self, key: str) -> dict:
+        return self._health.get(key) or {"status": "unknown", "fail_streak": 0, "at": 0, "error": ""}
+
+    def is_usable(self, key: str) -> bool:
+        """可用 = 启用 && 未被健康巡检判死。
+        unknown（没测过）按可用处理 —— 对齐 ds2: unknown 视为"可用但不保证"，
+        否则新导入的节点会因为还没测速而全部被排除。"""
+        node = next((n for n in self._nodes if n["key"] == key), None)
+        if not node or not node.get("enabled", True):
+            return False
+        return self._health_of(key).get("status") != "fail"
+
+    def usable_node_keys(self) -> list[str]:
+        """可用节点（按延迟升序，未测速的排后），供自动选优组使用。"""
+        with self._lock:
+            cands = []
+            for n in self._nodes:
+                if not self.is_usable(n["key"]):
+                    continue
+                h = self._health_of(n["key"])
+                cands.append((0 if h.get("status") == "ok" else 1,
+                              h.get("latency_ms") or 10 ** 9, n["key"]))
+            cands.sort()
+            return [k for _, _, k in cands]
+
+    def health_summary(self) -> dict:
+        with self._lock:
+            ok = fail = 0
+            for n in self._nodes:
+                st = self._health_of(n["key"]).get("status")
+                if st == "ok":
+                    ok += 1
+                elif st == "fail":
+                    fail += 1
+            total = len(self._nodes)
+            return {"total": total, "ok": ok, "fail": fail, "unknown": total - ok - fail,
+                    "last_sweep": self._last_sweep,
+                    "interval_min": self._health_interval_min,
+                    "sub_refresh_hours": self._sub_refresh_hours,
+                    "last_sub_refresh": self._last_sub_refresh}
+
+    def sweep_health(self, only_unusable_first: bool = True) -> dict:
+        """健康巡检：并发测速（未测速/异常优先，避免每次全量测 1600 个）。
+        结果落 _health；fail 节点立即从 AUTO 组与可用候选中排除。"""
+        with self._lock:
+            if self._sweeping:
+                return {"ok": False, "error": "巡检进行中"}
+            self._sweeping = True
+        try:
+            if not self.is_running():
+                return {"ok": False, "error": "桥未运行：请先启用桥接再巡检"}
+            with self._lock:
+                enabled = [n["key"] for n in self._nodes if n.get("enabled", True)]
+                pending = [k for k in enabled if self._health_of(k).get("status") != "ok"]
+                known_ok = [k for k in enabled if self._health_of(k).get("status") == "ok"]
+                # 未测速/异常优先；已 ok 的每轮抽测一部分保持新鲜
+                targets = pending + known_ok[: max(0, 200 - len(pending))]
+            t0 = time.time()
+            res = self.test_nodes(targets)
+            now = int(time.time())
+            with self._lock:
+                for item in res.get("results", []):
+                    key = item["key"]
+                    prev = self._health_of(key)
+                    if item["ok"]:
+                        self._health[key] = {"status": "ok", "latency_ms": item["delay_ms"],
+                                             "fail_streak": 0, "at": now, "error": ""}
+                    else:
+                        streak = int(prev.get("fail_streak") or 0) + 1
+                        # 连续失败 2 次才判死，避免单次抖动把节点踢出池
+                        self._health[key] = {
+                            "status": "fail" if streak >= 2 else prev.get("status", "unknown"),
+                            "latency_ms": None, "fail_streak": streak, "at": now,
+                            "error": item.get("error", "")}
+                self._last_sweep = now
+                self._save()
+            ok_n = sum(1 for i in res.get("results", []) if i["ok"])
+            fail_n = len(res.get("results", [])) - ok_n
+            return {"ok": True, "tested": len(res.get("results", [])), "healthy": ok_n,
+                    "failed": fail_n, "seconds": round(time.time() - t0, 1)}
+        finally:
+            with self._lock:
+                self._sweeping = False
+
+    def prune_unusable_from_auto(self):
+        """让 runtime.yaml 的 AUTO 组只保留可用节点（fail 节点不参与自动选优）。
+        注意：节点仍保留在 proxies 里（直出监听不能因一次测速失败就断），
+        只是不再被 BRIDGE-AUTO 选中。"""
+        return self.usable_node_keys()
+
+    def set_health_settings(self, health_interval_min: int | None = None,
+                            sub_refresh_hours: int | None = None) -> str:
+        with self._lock:
+            if health_interval_min is not None:
+                self._health_interval_min = max(1, int(health_interval_min))
+            if sub_refresh_hours is not None:
+                self._sub_refresh_hours = max(0, int(sub_refresh_hours))
+            self._save()
+        return ""
+
+    def refresh_all_subscriptions(self) -> dict:
+        """按需/定时刷新全部订阅。返回统计。"""
+        with self._lock:
+            subs = [dict(s) for s in self._subscriptions]
+        refreshed, failed = 0, []
+        for sub in subs:
+            _, err = self.refresh_subscription(sub["id"])
+            if err:
+                failed.append({"name": sub.get("name"), "error": err})
+            else:
+                refreshed += 1
+            time.sleep(0.5)
+        with self._lock:
+            self._last_sub_refresh = int(time.time())
+            self._save()
+        return {"refreshed": refreshed, "failed": failed}
+
+    def _health_loop(self):
+        """后台定时任务：节点健康巡检 + 订阅自动刷新。"""
+        while True:
+            time.sleep(30)
+            try:
+                with self._lock:
+                    enabled = self._enabled
+                    due_sweep = (time.time() - self._last_sweep) >= self._health_interval_min * 60
+                    due_sub = (self._sub_refresh_hours > 0 and self._subscriptions
+                               and (time.time() - self._last_sub_refresh) >= self._sub_refresh_hours * 3600)
+                if not enabled or not self.is_running():
+                    continue
+                if due_sweep:
+                    res = self.sweep_health()
+                    if res.get("ok"):
+                        log.info("【Mihomo 桥】健康巡检完成：%s 个可用 / %s 个异常（耗时 %ss）",
+                                 res["healthy"], res["failed"], res["seconds"])
+                        self.request_apply()      # AUTO 组成员变化 → 重新生成配置
+                if due_sub:
+                    res = self.refresh_all_subscriptions()
+                    log.info("【Mihomo 桥】订阅自动刷新：成功 %s 个%s", res["refreshed"],
+                             f"，失败 {len(res['failed'])} 个" if res["failed"] else "")
+                    self.request_apply()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("【Mihomo 桥】后台任务异常: %s", exc)
     def _alloc_port(self, key: str) -> int:
         with self._lock:
             if key in self._port_map:
@@ -777,6 +942,9 @@ class MihomoBridge:
         with self._lock:
             active = [n for n in self._nodes if n.get("enabled", True)]
             flight_names = [n["key"] for n in active]
+            # AUTO 组只放"可用"节点（健康巡检判死的排除），但 proxies 全量保留，
+            # 直出监听不能因一次测速失败就断掉。
+            auto_members = [n["key"] for n in active if self.is_usable(n["key"])] or flight_names
             proxies: list[dict] = [dict(n["raw"]) for n in active]
             listeners: list[dict] = []
             used_ports: set[int] = set()
@@ -831,7 +999,7 @@ class MihomoBridge:
             doc["secret"] = secret
             if flight_names:
                 doc["proxy-groups"] = [{"name": AUTO_GROUP, "type": "url-test",
-                                        "proxies": flight_names,
+                                        "proxies": auto_members,
                                         "url": "https://www.gstatic.com/generate_204",
                                         "interval": 300, "tolerance": 50}]
             doc["proxies"] = proxies
@@ -974,13 +1142,13 @@ class MihomoBridge:
                     f.write(body)
                 self._api_secret = secret
                 self._last_yaml = body
-                log = open(self.log_path, "ab")
+                logfile = open(self.log_path, "ab")
                 kwargs = {}
                 if os.name == "nt":
                     kwargs["creationflags"] = 0x08000000   # CREATE_NO_WINDOW
                 self._proc = subprocess.Popen(
                     [binary, "-d", self.dir, "-f", self.config_path],
-                    stdout=log, stderr=log, **kwargs)
+                    stdout=logfile, stderr=logfile, **kwargs)
                 self._running_pid = self._proc.pid
                 if not self._wait_ready(self._proc, 6.0):
                     if self._proc.poll() is not None:
@@ -1047,6 +1215,8 @@ class MihomoBridge:
                              name="mihomo-apply").start()
         threading.Thread(target=self._watch_loop, daemon=True,
                          name="mihomo-watcher").start()
+        threading.Thread(target=self._health_loop, daemon=True,
+                         name="mihomo-health").start()
 
     def _apply_from_app(self):
         """由 app 层注入 build 所需的池条目后执行 apply（见 app.py _mihomo_chain_entries）。"""

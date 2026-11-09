@@ -715,6 +715,19 @@ details.raw pre{margin-top:6px}
           muse 账号 → 本地桥端口 → 飞行节点 → 原代理 → muse 上游；也可让飞行节点<b>直出</b>作为代理池出口。
         </p>
         <dl class="facts" id="mhFacts"></dl>
+        <div class="form-grid" style="margin-top:12px">
+          <div class="field"><label>节点健康巡检周期（分钟）</label>
+            <input class="inp" id="mhHealthInterval" type="number" min="1" max="1440" placeholder="30">
+          </div>
+          <div class="field"><label>订阅自动刷新周期（小时，0=关闭）</label>
+            <input class="inp" id="mhSubRefreshHours" type="number" min="0" max="720" placeholder="0">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <button class="ghost" type="button" onclick="mihomoSaveTimers(this)">💾 保存周期</button>
+          <button class="ghost" type="button" onclick="mihomoSweepHealth(this)">🩺 立即巡检并筛选可用节点</button>
+          <button class="ghost" type="button" onclick="mihomoRefreshAllSubs(this)">↻ 立即刷新全部订阅</button>
+        </div>
         <div id="mhDownloadWrap" style="margin-top:10px">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <button class="primary" type="button" id="mhEnableBtn" onclick="mihomoToggleEnabled()">启用桥接</button>
@@ -758,7 +771,7 @@ details.raw pre{margin-top:6px}
         <div class="tblwrap"><table class="table">
           <thead><tr>
             <th class="th-check"><input type="checkbox" id="mhNodeSelectAll" aria-label="全选" onchange="toggleMhNodeSelectAll()"></th>
-            <th>节点</th><th>协议</th><th>服务器</th><th>来源</th><th>状态</th><th>延迟</th><th>直出端口</th><th>操作</th>
+            <th>节点</th><th>协议</th><th>服务器</th><th>来源</th><th>状态</th><th>健康</th><th>延迟</th><th>直出端口</th><th>操作</th>
           </tr></thead>
           <tbody id="mhNodeBody"></tbody>
         </table></div>
@@ -1886,6 +1899,16 @@ const I18N_EN_HTML = {
   "节点测试完成：X 个可用，Y 个失败": "Node test finished: X usable, Y failed",
   "桥未运行：请先在状态卡启用桥接再测试节点": "Bridge is not running: enable it in the status card before testing nodes",
   "请先选择节点": "Select nodes first",
+  /* ---- 健康巡检与订阅定时刷新 ---- */
+  "节点健康巡检周期（分钟）": "Node health check interval (minutes)",
+  "订阅自动刷新周期（小时，0=关闭）": "Subscription auto-refresh interval (hours, 0=off)",
+  "💾 保存周期": "💾 Save intervals",
+  "🩺 立即巡检并筛选可用节点": "🩺 Run health check now",
+  "↻ 立即刷新全部订阅": "↻ Refresh all subscriptions",
+  "可用节点": "Usable nodes", "异常节点": "Failed nodes", "未测速": "Untested", "上次巡检": "Last sweep",
+  "可用": "Usable", "异常": "Failed", "未测": "Untested",
+  "连续测速失败，已从自动选优剔除": "Repeated check failures; excluded from auto-select",
+  "巡检中…": "Checking…", "刷新中…": "Refreshing…",
 };
 /* 含变量的文案：[正则源码, 替换串]，按顺序匹配整段文本（移植自旧版，服务端消息不变） */
 const I18N_EN_PATTERNS = ([
@@ -2031,6 +2054,18 @@ const I18N_EN_PATTERNS = ([
   ["节点测试完成：(\\d+) 个可用", "Node test finished: $1 usable"],
   ["桥未运行：请先在状态卡启用桥接再测试节点", "The bridge is not running: enable it in the status card before testing nodes"],
   ["请先选择节点", "Select nodes first"],
+  /* ---- 健康巡检与订阅定时刷新 ---- */
+  ["巡检完成：(\\d+) 个可用，(\\d+) 个异常（已从自动选优移除）", "Health check finished: $1 usable, $2 failed (removed from auto-select)"],
+  ["巡检完成：(\\d+) 个可用，(\\d+) 个异常", "Health check finished: $1 usable, $2 failed"],
+  ["订阅刷新完成：成功 (\\d+) 个，失败 (\\d+) 个", "Subscriptions refreshed: $1 succeeded, $2 failed"],
+  ["订阅刷新完成：成功 (\\d+) 个", "Subscriptions refreshed: $1 succeeded"],
+  ["已保存：每 (\\d+) 分钟巡检，每 (\\d+) 小时刷新订阅", "Saved: health check every $1 min, subscriptions every $2 h"],
+  ["已保存：每 (\\d+) 分钟巡检（订阅自动刷新已关闭）", "Saved: health check every $1 min (subscription auto-refresh off)"],
+  ["巡检进行中", "A health check is already running"],
+  ["桥未运行：请先启用桥接再巡检", "The bridge is not running: enable it before running a health check"],
+  ["巡检失败：(.*)", "Health check failed: $1"],
+  ["刷新失败：(.*)", "Refresh failed: $1"],
+  ["保存失败：(.*)", "Save failed: $1"],
   ["任务异常: (.*)", "Task error: $1"],
   ["生成失败: (.*)", "Generation failed: $1"],
   ["助手超时: (.*)", "Assistant timeout: $1"],
@@ -2990,6 +3025,19 @@ function renderMihomo(){
     fact('控制端口', String(s.api_port)) +
     fact('工作目录', `<span class="mono" style="font-size:11px">${esc(s.work_dir || '')}</span>`) +
     fact('最近错误', s.last_error ? `<span style="color:var(--bad)">${esc(s.last_error)}</span>` : '—');
+  // 健康概览（自动筛选的结果）
+  const hs = s.health_summary || {};
+  if ($('mhFacts')){
+    $('mhFacts').insertAdjacentHTML('beforeend',
+      fact('可用节点', `<span class="badge ok">${hs.ok ?? 0}</span>`) +
+      fact('异常节点', `<span class="badge bad">${hs.fail ?? 0}</span>`) +
+      fact('未测速', `<span class="badge mute">${hs.unknown ?? 0}</span>`) +
+      fact('上次巡检', hs.last_sweep ? esc(t(ago(hs.last_sweep))) : '—'));
+  }
+  if ($('mhHealthInterval') && document.activeElement !== $('mhHealthInterval'))
+    $('mhHealthInterval').value = hs.interval_min ?? 30;
+  if ($('mhSubRefreshHours') && document.activeElement !== $('mhSubRefreshHours'))
+    $('mhSubRefreshHours').value = hs.sub_refresh_hours ?? 0;
   renderMihomoSubs();
   renderMihomoNodes();
   renderMihomoChains();
@@ -3021,7 +3069,7 @@ function renderMihomoNodes(){
   pruneMhNodeSelection();
   updateMhNodeSelectionUI();
   if (!mhNodes.length){
-    tb.innerHTML = `<tr><td colspan="9" class="empty">${esc(t('没有飞行节点。添加订阅或导入分享链接'))}</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="10" class="empty">${esc(t('没有飞行节点。添加订阅或导入分享链接'))}</td></tr>`;
     return;
   }
   tb.innerHTML = mhNodes.map(n => {
@@ -3031,17 +3079,22 @@ function renderMihomoNodes(){
     const state = n.enabled === false
       ? `<span class="badge mute">${esc(t('已停用'))}</span>`
       : `<span class="badge ok">${esc(t('启用中'))}</span>`;
+    const hstate = n.health === 'fail'
+      ? `<span class="badge bad" title="${esc(t('连续测速失败，已从自动选优剔除'))}">${esc(t('异常'))}</span>`
+      : n.health === 'ok' ? `<span class="badge ok">${esc(t('可用'))}</span>`
+      : `<span class="badge mute">${esc(t('未测'))}</span>`;
     const delay = n.delay_ms != null
       ? `<span class="badge ${n.delay_ms < 400 ? 'ok' : n.delay_ms < 900 ? 'warn' : 'bad'}">${n.delay_ms} ms</span>`
       : (n.delay_error ? `<span class="badge bad" title="${esc(n.delay_error)}">${esc(t('失败'))}</span>` : '<span class="badge mute">—</span>');
     const isSel = _mhNodeSel.has(n.key);
-    return `<tr data-nkey="${esc(n.key)}" class="${isSel ? 'px-selected' : ''}${n.enabled === false ? ' row-dim' : ''}">
+    return `<tr data-nkey="${esc(n.key)}" class="${isSel ? 'px-selected' : ''}${n.enabled === false || n.health === 'fail' ? ' row-dim' : ''}">
       <td class="td-check"><input type="checkbox" class="mh-node-check" ${isSel ? 'checked' : ''} onchange="toggleMhNodeSelect('${esc(n.key)}')" aria-label="${esc(t('选择该节点'))}"></td>
       <td><b>${esc(n.name)}</b></td>
       <td><span class="badge info">${esc(n.type)}</span></td>
       <td class="mono ellip" style="max-width:200px" title="${esc(n.server)}">${esc(n.server)}:${n.port}</td>
       <td>${esc(n.source)}</td>
       <td>${state}</td>
+      <td>${hstate}</td>
       <td>${delay}</td>
       <td>${direct}</td>
       <td><div class="acts">
@@ -3199,6 +3252,42 @@ async function mihomoToggleEnabled(){
     renderMihomo();
     refreshMihomo();
   }catch(e){ toast('操作失败：' + e.message, 'bad'); }
+}
+
+async function mihomoSaveTimers(btn){
+  if (btn) btn.disabled = true;
+  try{
+    const hi = parseInt($('mhHealthInterval').value) || 30;
+    const sh = parseInt($('mhSubRefreshHours').value) || 0;
+    const r = await api('/admin/mihomo/settings', {method:'PUT',
+      body: JSON.stringify({health_interval_min: hi, sub_refresh_hours: sh})});
+    mhStatus = r.status;
+    toast(sh > 0 ? `已保存：每 ${hi} 分钟巡检，每 ${sh} 小时刷新订阅` : `已保存：每 ${hi} 分钟巡检（订阅自动刷新已关闭）`, 'ok');
+    renderMihomo();
+  }catch(e){ toast('保存失败：' + e.message, 'bad'); }
+  finally{ if (btn) btn.disabled = false; }
+}
+
+async function mihomoSweepHealth(btn){
+  if (btn){ btn.disabled = true; btn.innerHTML = `<span class="loading"></span> ${esc(t('巡检中…'))}`; }
+  try{
+    const r = await api('/admin/mihomo/health-sweep', {method:'POST'});
+    mhNodes = r.nodes || mhNodes;
+    toast(`巡检完成：${r.healthy} 个可用，${r.failed} 个异常（已从自动选优移除）`, r.failed ? 'warn' : 'ok');
+    await refreshMihomo();
+  }catch(e){ toast('巡检失败：' + e.message, 'bad'); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = t('🩺 立即巡检并筛选可用节点'); } }
+}
+
+async function mihomoRefreshAllSubs(btn){
+  if (btn){ btn.disabled = true; btn.innerHTML = `<span class="loading"></span> ${esc(t('刷新中…'))}`; }
+  try{
+    const r = await api('/admin/mihomo/subscriptions/refresh-all', {method:'POST'});
+    const failed = (r.failed || []).length;
+    toast(`订阅刷新完成：成功 ${r.refreshed} 个${failed ? `，失败 ${failed} 个` : ''}`, failed ? 'warn' : 'ok');
+    await refreshMihomo();
+  }catch(e){ toast('刷新失败：' + e.message, 'bad'); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = t('↻ 立即刷新全部订阅'); } }
 }
 
 async function mihomoApplyNow(btn){
