@@ -2343,6 +2343,24 @@ def sweep_pool_health(_=Depends(auth)):
             "proxies": _proxy_view_rows()}
 
 
+def _prune_pool_entries_by_server(servers: list[str]):
+    """巡检判死的节点释放端口后，清掉指向这些端口的直出池条目（否则就是死条目）。"""
+    targets = {s for s in servers if s}
+    removed = 0
+    for entry in POOL.entries():
+        if entry.get("server") in targets:
+            binders = [a for a in store.accounts
+                       if a.get("proxy_mode") == "bind" and a.get("proxy_id") == entry["id"]]
+            for a in binders:
+                store.update_account(a["id"], proxy_mode="rotate", proxy_id="",
+                                     note="原绑定代理已被健康巡检移除，已自动切换为轮询代理池")
+            if POOL.remove(entry["id"]):
+                removed += 1
+    if removed:
+        log.info("【Mihomo 桥】巡检清理了 %d 个失效的直出池条目", removed)
+    return removed
+
+
 def _mihomo_chain_entries() -> list[dict]:
     """给 BRIDGE 提供链式封装所需的池代理配置。"""
     out = []
@@ -2372,13 +2390,14 @@ def mihomo_settings(req: MihomoSettingsRequest, _=Depends(auth)):
 
 @app.post("/admin/mihomo/health-sweep")
 def mihomo_health_sweep(_=Depends(auth)):
-    """立即巡检：并发测速全部未测/异常节点，失败的从 AUTO 组剔除。"""
+    """立即巡检：并发测速全部未测/异常节点；判死的节点直接从列表移除并清理池条目。"""
     res = BRIDGE.sweep_health()
     if not res.get("ok"):
         raise HTTPException(400, res.get("error") or "巡检失败")
     BRIDGE.request_apply()
     return {"ok": True, **res, "nodes": BRIDGE.list_nodes(),
-            "health_summary": BRIDGE.health_summary()}
+            "health_summary": BRIDGE.health_summary(),
+            "proxies": _proxy_view_rows()}
 
 
 @app.post("/admin/mihomo/subscriptions/refresh-all")
@@ -3423,6 +3442,7 @@ async def _startup():
         log.info("🔑 未检测到 MUSE2API_KEY，已自动生成初始密钥: %s", new_key)
     _migrate_legacy_proxies()
     BRIDGE.set_chain_entries_provider(_mihomo_chain_entries)
+    BRIDGE.set_prune_pool_callback(_prune_pool_entries_by_server)
     BRIDGE.start_if_enabled()
     threading.Thread(target=_proxy_health_loop, daemon=True, name="proxy-health").start()
     asyncio.create_task(_keepalive_loop())

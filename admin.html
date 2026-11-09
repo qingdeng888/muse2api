@@ -2055,7 +2055,7 @@ const I18N_EN_PATTERNS = ([
   ["桥未运行：请先在状态卡启用桥接再测试节点", "The bridge is not running: enable it in the status card before testing nodes"],
   ["请先选择节点", "Select nodes first"],
   /* ---- 健康巡检与订阅定时刷新 ---- */
-  ["巡检完成：(\\d+) 个可用，(\\d+) 个异常（已从自动选优移除）", "Health check finished: $1 usable, $2 failed (removed from auto-select)"],
+  ["巡检完成：(\\d+) 个可用，(\\d+) 个异常，已移除 (\\d+) 个失效节点", "Health check finished: $1 usable, $2 failed, $3 dead node(s) removed"],
   ["巡检完成：(\\d+) 个可用，(\\d+) 个异常", "Health check finished: $1 usable, $2 failed"],
   ["订阅刷新完成：成功 (\\d+) 个，失败 (\\d+) 个", "Subscriptions refreshed: $1 succeeded, $2 failed"],
   ["订阅刷新完成：成功 (\\d+) 个", "Subscriptions refreshed: $1 succeeded"],
@@ -3273,7 +3273,10 @@ async function mihomoSweepHealth(btn){
   try{
     const r = await api('/admin/mihomo/health-sweep', {method:'POST'});
     mhNodes = r.nodes || mhNodes;
-    toast(`巡检完成：${r.healthy} 个可用，${r.failed} 个异常（已从自动选优移除）`, r.failed ? 'warn' : 'ok');
+    const removed = r.removed || 0;
+    toast(`巡检完成：${r.healthy} 个可用，${r.failed} 个异常${removed ? `，已移除 ${removed} 个失效节点` : ''}`,
+          r.failed ? 'warn' : 'ok');
+    if (r.proxies){ poolRows = r.proxies; poolLoadedAt = Date.now(); }
     await refreshMihomo();
   }catch(e){ toast('巡检失败：' + e.message, 'bad'); }
   finally{ if (btn){ btn.disabled = false; btn.textContent = t('🩺 立即巡检并筛选可用节点'); } }

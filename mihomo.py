@@ -598,16 +598,18 @@ class MihomoBridge:
             return {"added": 0, "error": "未解析出任何节点（支持 vless/vmess/trojan/ss/hysteria2(hy2)/tuic/anytls 链接）"}
         with self._lock:
             before = {n["key"] for n in self._nodes}
-            self._upsert_nodes("link", nodes)
+            self._upsert_nodes("link", nodes, replace_source=False)
             added = len([n for n in self._nodes if n["source"] == "link"]) - len(
                 [k for k in before if k.startswith("link::")])
             self._save()
         return {"added": max(0, added)}
 
-    def _upsert_nodes(self, source: str, nodes: list[dict]):
+    def _upsert_nodes(self, source: str, nodes: list[dict], replace_source: bool = True):
         """source::name 限定命名；同源替换、跨源共存。
-        已停用的节点与手动删除的墓碑（_disabled/_removed）在刷新后保持原状态，
-        否则每次刷新订阅都"复活"用户刻意关掉/删掉的节点。"""
+
+        replace_source=True（订阅刷新）：同源旧节点全量替换，消失的节点随之移除。
+        replace_source=False（分享链接追加）：按 key 合并，分次粘贴的链接不会互相覆盖。
+        已停用节点与手动删除的墓碑（_disabled/_removed）保持原状态。"""
         fresh = []
         for n in nodes:
             key = f"{source}::{n['name']}"
@@ -619,7 +621,13 @@ class MihomoBridge:
                           "type": n["type"], "server": n["server"], "port": n["port"],
                           "enabled": key not in self._disabled,
                           "raw": raw})
-        self._nodes = [n for n in self._nodes if n.get("source") != source] + fresh
+        if replace_source:
+            self._nodes = [n for n in self._nodes if n.get("source") != source] + fresh
+        else:
+            fresh_keys = {n["key"] for n in fresh}
+            kept = [n for n in self._nodes
+                    if n.get("source") != source or n["key"] not in fresh_keys]
+            self._nodes = kept + fresh
         self._nodes.sort(key=lambda n: n["key"])
         self._gc_ports()      # 节点被订阅刷新移除 → 释放其直出端口
 
@@ -765,9 +773,11 @@ class MihomoBridge:
                     "sub_refresh_hours": self._sub_refresh_hours,
                     "last_sub_refresh": self._last_sub_refresh}
 
-    def sweep_health(self, only_unusable_first: bool = True) -> dict:
+    def sweep_health(self, only_unusable_first: bool = True,
+                     prune_failed: bool = True) -> dict:
         """健康巡检：并发测速（未测速/异常优先，避免每次全量测 1600 个）。
-        结果落 _health；fail 节点立即从 AUTO 组与可用候选中排除。"""
+        判定 fail 的节点直接**从节点列表移除**（释放端口、摘掉链式、清理对应池条目），
+        避免上百个死节点占着界面和配置。订阅刷新会把它们重新带回来再测。"""
         with self._lock:
             if self._sweeping:
                 return {"ok": False, "error": "巡检进行中"}
@@ -784,6 +794,7 @@ class MihomoBridge:
             t0 = time.time()
             res = self.test_nodes(targets)
             now = int(time.time())
+            doomed: list[str] = []
             with self._lock:
                 for item in res.get("results", []):
                     key = item["key"]
@@ -794,19 +805,64 @@ class MihomoBridge:
                     else:
                         streak = int(prev.get("fail_streak") or 0) + 1
                         # 连续失败 2 次才判死，避免单次抖动把节点踢出池
-                        self._health[key] = {
-                            "status": "fail" if streak >= 2 else prev.get("status", "unknown"),
-                            "latency_ms": None, "fail_streak": streak, "at": now,
-                            "error": item.get("error", "")}
+                        if streak >= 2:
+                            self._health[key] = {"status": "fail", "latency_ms": None,
+                                                 "fail_streak": streak, "at": now,
+                                                 "error": item.get("error", "")}
+                            doomed.append(key)
+                        else:
+                            self._health[key] = {"status": prev.get("status", "unknown"),
+                                                 "latency_ms": None, "fail_streak": streak,
+                                                 "at": now, "error": item.get("error", "")}
                 self._last_sweep = now
-                self._save()
+            removed = self._prune_failed(doomed) if (prune_failed and doomed) else 0
             ok_n = sum(1 for i in res.get("results", []) if i["ok"])
             fail_n = len(res.get("results", [])) - ok_n
             return {"ok": True, "tested": len(res.get("results", [])), "healthy": ok_n,
-                    "failed": fail_n, "seconds": round(time.time() - t0, 1)}
+                    "failed": fail_n, "removed": removed,
+                    "seconds": round(time.time() - t0, 1)}
         finally:
             with self._lock:
                 self._sweeping = False
+
+    def _prune_failed(self, keys: list[str]) -> int:
+        """把判死的节点真正从列表移除，并清掉它们的端口/链式/池条目。
+        不做任何"已移除"记录：订阅刷新会重新带回这些节点，届时再测再判。"""
+        removed = 0
+        removal_targets = []
+        with self._lock:
+            for key in keys:
+                node = next((n for n in self._nodes if n["key"] == key), None)
+                if not node:
+                    continue
+                # 摘掉引用该节点的链式封装
+                for pid, ch in list(self._chains.items()):
+                    if ch.get("flight") == key:
+                        self._chains.pop(pid, None)
+                        self._port_map.pop("chain::" + pid, None)
+                dport = self._port_map.pop(key, None)
+                if dport:
+                    removal_targets.append(f"socks5://127.0.0.1:{dport}")
+                self._nodes = [n for n in self._nodes if n["key"] != key]
+                self._health.pop(key, None)
+                self._delays.pop(key, None)
+                self._disabled.discard(key)
+                self._removed.discard(key)
+                removed += 1
+            if removed:
+                self._save()
+        # 清理 app 层对应的直出池条目（端口已释放，留着就是死条目）
+        fn = getattr(self, "_prune_pool_callback", None)
+        if fn and removal_targets:
+            try:
+                fn(removal_targets)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("【Mihomo 桥】清理池条目失败: %s", exc)
+        return removed
+
+    def set_prune_pool_callback(self, fn):
+        """app 层注入：接收失效的 socks5://127.0.0.1:port 列表，删除对应池条目。"""
+        self._prune_pool_callback = fn
 
     def prune_unusable_from_auto(self):
         """让 runtime.yaml 的 AUTO 组只保留可用节点（fail 节点不参与自动选优）。

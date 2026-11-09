@@ -78,9 +78,19 @@ def test_subscription_payload_forms():
 
 
 def _fresh_bridge():
+    """每个测试独立目录，避免状态串味（健康/墓碑/端口都不共享）。"""
     _counter = getattr(_fresh_bridge, "_n", 0) + 1
     _fresh_bridge._n = _counter
-    return MihomoBridge()
+    d = Path(_tmp.name) / f"m{_counter}"
+    old = os.environ.get("MUSE2API_MIHOMO_DIR")
+    os.environ["MUSE2API_MIHOMO_DIR"] = str(d)
+    try:
+        return MihomoBridge()
+    finally:
+        if old is None:
+            os.environ.pop("MUSE2API_MIHOMO_DIR", None)
+        else:
+            os.environ["MUSE2API_MIHOMO_DIR"] = old
 
 
 def test_bridge_state_and_ports():
@@ -204,26 +214,54 @@ def test_health_filtering():
     # 一次失败不够判死（fail_streak 阈值 2）
     b._health[keys[0]] = {"status": "unknown", "fail_streak": 1, "latency_ms": None, "at": 0, "error": "x"}
     assert b.is_usable(keys[0])
-    # 第二次失败 → fail，从可用池剔除
+    assert len(b.list_nodes()) == 3, "首次失败不应移除节点"
+    # 第二次失败 → 判死并**直接从列表移除**
     b._health[keys[0]] = {"status": "fail", "fail_streak": 2, "latency_ms": None, "at": 0, "error": "x"}
-    assert not b.is_usable(keys[0])
-    assert keys[0] not in b.usable_node_keys()
-    # AUTO 组排除 fail，但 proxies 仍保留（直出不断）
+    n_removed = b._prune_failed([keys[0]])
+    assert n_removed == 1
+    remaining = [n["key"] for n in b.list_nodes()]
+    assert keys[0] not in remaining and len(remaining) == 2, "判死节点必须从节点列表删除"
+    # AUTO 组与 proxies 都不再包含它
     body, _ = b.build_yaml([])
     doc = __import__("yaml").safe_load(body)
     auto = next(g for g in doc["proxy-groups"] if g["name"] == AUTO_GROUP)
-    assert keys[0] not in auto["proxies"] and len(auto["proxies"]) == 2
-    assert keys[0] in [p["name"] for p in doc["proxies"]], "fail 节点仍保留在 proxies，避免直出监听断掉"
-    # 恢复 ok → 回到可用池
-    b._health[keys[0]] = {"status": "ok", "fail_streak": 0, "latency_ms": 120, "at": 0, "error": ""}
-    assert b.is_usable(keys[0])
-    assert b.usable_node_keys()[0] == keys[0], "按延迟升序，ok 的排最前"
+    assert keys[0] not in auto["proxies"]
+    assert keys[0] not in [p["name"] for p in doc["proxies"]]
+    # 删除后不留墓碑：重新导入订阅能让它回来（订阅刷新即此路径）
+    b._upsert_nodes("link", parse_share_links("vless://u@1.1.1.1:443#H1"), replace_source=False)
+    assert keys[0] in [n["key"] for n in b.list_nodes()], "订阅刷新应能把节点带回来重新测"
+    # 恢复 ok → 按延迟升序排最前，未测的排后（keys[0] 刚从订阅刷新回来，仍是 unknown）
+    b._health[keys[1]] = {"status": "ok", "fail_streak": 0, "latency_ms": 120, "at": 0, "error": ""}
+    b._health[keys[2]] = {"status": "ok", "fail_streak": 0, "latency_ms": 300, "at": 0, "error": ""}
+    order = b.usable_node_keys()
+    assert order[:2] == [keys[1], keys[2]], f"ok 节点应按延迟升序排最前，实际 {order}"
+    assert order[2] == keys[0], "unknown 节点排最后"
     # 停用节点无论健康与否都不可用
-    b.set_nodes_enabled([keys[1]], False)
-    assert not b.is_usable(keys[1])
+    b.set_nodes_enabled([keys[2]], False)
+    assert not b.is_usable(keys[2])
     s = b.health_summary()
-    assert s["total"] == 3 and s["ok"] == 1
-    print("PASS: health filtering (unknown usable / fail excluded after 2 strikes / auto group)")
+    assert s["total"] == 3 and s["ok"] == 2
+    print("PASS: health filtering (2-strike removal, no tombstone, revives on refresh)")
+
+
+def test_prune_cleans_ports_and_chains():
+    b = _fresh_bridge()
+    b.import_links("vless://u@1.1.1.1:443#P1\nvless://u@2.2.2.2:443#P2")
+    keys = sorted(n["key"] for n in b.list_nodes())
+    b.register_direct(keys[0])
+    b.set_chain("pidP", keys[1], {"id": "pidP", "server": "http://1.1.1.1:80"})
+    assert b._port_map.get(keys[0]) and b._port_map.get("chain::pidP")
+    removed_servers = []
+    b.set_prune_pool_callback(lambda servers: removed_servers.extend(servers))
+    b._health[keys[0]] = {"status": "fail", "fail_streak": 2, "latency_ms": None, "at": 0, "error": "t"}
+    b._health[keys[1]] = {"status": "fail", "fail_streak": 2, "latency_ms": None, "at": 0, "error": "t"}
+    assert b._prune_failed([keys[0], keys[1]]) == 2
+    assert keys[0] not in b._port_map, "直出端口应释放"
+    assert "chain::pidP" not in b._port_map and b.chain_info("pidP") is None, "引用它的链式应摘除"
+    assert removed_servers and removed_servers[0].startswith("socks5://127.0.0.1:"), \
+        "应回调 app 层清理失效的直出池条目"
+    assert not [n for n in b.list_nodes()]
+    print("PASS: prune releases ports, drops chains, notifies pool cleanup")
 
 
 def test_timer_settings():
@@ -246,5 +284,6 @@ if __name__ == "__main__":
     test_node_bulk_state()
     test_node_test_requires_bridge()
     test_health_filtering()
+    test_prune_cleans_ports_and_chains()
     test_timer_settings()
     print("ALL MIHOMO TESTS PASSED")
