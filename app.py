@@ -2369,6 +2369,13 @@ def mihomo_download_binary(_=Depends(auth)):
     return {"ok": True, "download": BRIDGE.download}
 
 
+@app.post("/admin/mihomo/apply")
+def mihomo_apply_now(_=Depends(auth)):
+    """同步重试启动（失败时把 mihomo 的真实报错返回给 UI）。"""
+    ok, err = BRIDGE.apply(_mihomo_chain_entries())
+    return {"ok": ok, "error": err, "status": BRIDGE.status()}
+
+
 @app.get("/admin/mihomo/subscriptions")
 def mihomo_list_subs(_=Depends(auth)):
     return {"subscriptions": BRIDGE.list_subscriptions()}

@@ -99,6 +99,16 @@ def _node(raw: dict) -> dict | None:
         return None
     if not name or not ntype or not server or port <= 0:
         return None
+    # REALITY 公钥必须是 32 字节的 base64url（无 padding），否则 mihomo 启动即 fatal。
+    # 导入时就拦下来，比让整个桥起不来友好得多。
+    if ntype == "vless" and isinstance(raw.get("reality-opts"), dict):
+        pbk = str(raw["reality-opts"].get("public-key") or "").strip()
+        try:
+            decoded = base64.urlsafe_b64decode(pbk + "=" * (-len(pbk) % 4))
+        except (binascii.Error, ValueError):
+            decoded = b""
+        if len(decoded) != 32:
+            return None
     raw["name"] = name
     raw["type"] = ntype
     raw["port"] = port
@@ -566,6 +576,7 @@ class MihomoBridge:
                           "raw": raw})
         self._nodes = [n for n in self._nodes if n.get("source") != source] + fresh
         self._nodes.sort(key=lambda n: n["key"])
+        self._gc_ports()      # 节点被订阅刷新移除 → 释放其直出端口
 
     def list_nodes(self) -> list[dict]:
         with self._lock:
@@ -594,11 +605,18 @@ class MihomoBridge:
             return port
 
     def _gc(self):
-        """节点消失 → 释放端口；池条目消失 → 释放链式端口。"""
+        """节点消失 → 释放其直出端口；链式端口只在关闭链式时释放。"""
         live_nodes = {n["key"] for n in self._nodes}
+        keep = set()
+        for k in self._port_map:
+            if k.startswith("chain::"):
+                keep.add(k)          # 链式端口由 set_chain(None) 显式释放
+            elif k in live_nodes:
+                keep.add(k)
+        self._port_map = {k: v for k, v in self._port_map.items() if k in keep}
+        chains_ports = {"chain::" + pid for pid in self._chains}
         self._port_map = {k: v for k, v in self._port_map.items()
-                          if k.startswith("chain::") or k in live_nodes}
-        self._chains = {k: v for k, v in self._chains.items() if k in live_nodes or True}
+                          if not k.startswith("chain::") or k in chains_ports}
 
     def set_chain(self, pool_pid: str, flight: str | None,
                   pool_entry: dict | None) -> tuple[dict | None, str]:
@@ -854,16 +872,37 @@ class MihomoBridge:
                 self._running_pid = self._proc.pid
                 if not self._wait_ready(self._proc, 6.0):
                     if self._proc.poll() is not None:
-                        err = f"mihomo 进程启动即退出（详见 {self.log_path}）"
+                        tail = self._log_tail()
+                        err = (f"mihomo 启动即退出：{tail}" if tail
+                               else f"mihomo 进程启动即退出（详见 {self.log_path}）")
                     else:
                         err = "mihomo 控制端口未就绪（超时 6s）"
                     self._last_error = err
+                    self._stop_process()      # 别让看门狗反复重启一个坏配置
                     return False, err
                 self._last_error = ""
                 return True, ""
             except Exception as exc:  # noqa: BLE001
                 self._last_error = f"应用失败：{exc}"
                 return False, self._last_error
+
+    def _log_tail(self, limit: int = 400) -> str:
+        """抓 mihomo 日志最后一条 fatal/error，给 UI 显示真正的原因。"""
+        try:
+            with open(self.log_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - 8192))
+                text = f.read().decode(errors="replace")
+        except OSError:
+            return ""
+        for line in reversed(text.splitlines()):
+            low = line.lower()
+            if "level=fatal" in low or "level=error" in low or "parse config error" in low:
+                idx = line.find("msg=")
+                msg = line[idx + 4:].strip().strip('"') if idx >= 0 else line.strip()
+                return msg[:limit]
+        return ""
 
     def _wait_ready(self, proc: subprocess.Popen, timeout: float) -> bool:
         deadline = time.time() + timeout
@@ -900,8 +939,7 @@ class MihomoBridge:
     def _apply_from_app(self):
         """由 app 层注入 build 所需的池条目后执行 apply（见 app.py _mihomo_chain_entries）。"""
         fn = getattr(self, "_chain_entries_provider", None)
-        if fn:
-            self.apply(fn())
+        return self.apply(fn() if fn else [])
 
     def set_chain_entries_provider(self, fn):
         self._chain_entries_provider = fn
@@ -912,16 +950,24 @@ class MihomoBridge:
                          name="mihomo-apply").start()
 
     def _watch_loop(self):
-        """看门狗：桥启用但控制端口失联 → 自愈重启（60s 节流 + 事件唤醒）。"""
+        """看门狗：桥启用但控制端口失联 → 自愈重启。
+        连续失败按指数退避（60s→10min），配置错误不会每 60 秒刷一次日志。"""
         last_heal = 0.0
+        backoff = 60.0
         while True:
             self._wake.wait(timeout=60)
             self._wake.clear()
             try:
                 if self._enabled and not self.is_running() and self.resolve_binary():
-                    if time.time() - last_heal > 60:
+                    if time.time() - last_heal >= backoff:
                         last_heal = time.time()
-                        self._apply_from_app()
+                        ok, err = self._apply_from_app()
+                        if ok:
+                            backoff = 60.0
+                        else:
+                            backoff = min(backoff * 2, 600.0)
+                            log_msg = f"自愈失败，{int(backoff)}s 后重试：{err}"
+                            self._last_error = log_msg
             except Exception as exc:  # noqa: BLE001
                 self._last_error = f"看门狗异常：{exc}"
 

@@ -30,7 +30,7 @@ def test_share_link_parsers():
         # trojan：ws + sni + insecure
         "trojan://pass-word@t.example.com:443?security=tls&sni=t.example.com&type=ws&path=%2Ftrojan&allowInsecure=1#Trojan-WS",
         # vless：reality
-        "vless://uuid-1234@v.example.com:443?security=reality&pbk=PUBKEY123&sid=ab12&fp=chrome&flow=xtls-rprx-vision#VLESS-Reality",
+        "vless://uuid-1234@v.example.com:443?security=reality&pbk=t8rMw1V-UYuMMHxVHeQ7rV2fRKkKBDd9aog0HJcZB4s&sid=ab12&fp=chrome&flow=xtls-rprx-vision#VLESS-Reality",
         # hysteria2（hy2 别名 + obfs）
         "hy2://pw123@h.example.com:36712?sni=h.example.com&obfs=salamander&obfs-password=obfspw&insecure=1#HY2-Node",
         # tuic
@@ -51,7 +51,7 @@ def test_share_link_parsers():
     tr = by_type["trojan"]
     assert tr["sni"] == "t.example.com" and tr["skip-cert-verify"] is True and tr["ws-opts"]["path"] == "/trojan"
     vl = by_type["vless"]
-    assert vl["reality-opts"]["public-key"] == "PUBKEY123" and vl["reality-opts"]["short-id"] == "ab12"
+    assert vl["reality-opts"]["public-key"] == "t8rMw1V-UYuMMHxVHeQ7rV2fRKkKBDd9aog0HJcZB4s" and vl["reality-opts"]["short-id"] == "ab12"
     assert vl["flow"] == "xtls-rprx-vision" and vl["client-fingerprint"] == "chrome"
     hy = by_type["hysteria2"]
     assert hy["obfs"] == "salamander" and hy["obfs-password"] == "obfspw" and hy["skip-cert-verify"] is True
@@ -104,7 +104,7 @@ def test_bridge_state_and_ports():
 def test_build_yaml_structure():
     b = _fresh_bridge()
     b.set_settings(enabled=True)
-    b.import_links("vless://u@7.7.7.7:443?security=reality&pbk=PK&sid=S1#Fly1\n"
+    b.import_links("vless://u@7.7.7.7:443?security=reality&pbk=t8rMw1V-UYuMMHxVHeQ7rV2fRKkKBDd9aog0HJcZB4s&sid=S1#Fly1\n"
                    "hy2://pw@8.8.8.8:36712#Fly2")
     nodes = b.list_nodes()
     # 链式：绑定一个池 http 代理走 AUTO 组

@@ -312,6 +312,7 @@ html[data-theme="light"] .code-card{background:#0f172a}
   animation:rise .35s ease both;
 }
 .notice.info{border-color:rgba(34,211,238,.4);background:rgba(34,211,238,.08)}
+.notice.bad{border-color:rgba(248,113,113,.5);background:var(--status-expired-bg)}
 .notice .ic{font-size:17px;line-height:1.4}
 .notice .nbody{flex:1;min-width:0;font-size:12.5px}
 .notice .ntitle{font-weight:800;color:var(--text)}
@@ -701,6 +702,12 @@ details.raw pre{margin-top:6px}
         <div class="section-head"><h3>桥接状态</h3>
           <span class="badge" id="mhRunBadge" data-no-i18n>…</span>
           <span class="spacer"></span><span class="eyebrow">mihomo core</span>
+        </div>
+        <div class="notice bad hidden" id="mhErrorBanner" role="alert">
+          <span class="ic">⚠️</span>
+          <div class="nbody"><div class="ntitle" data-i18n="mh-error-title">mihomo 启动失败，桥接不可用</div>
+            <div class="nmsg mono" id="mhErrorText" style="font-size:11.5px"></div></div>
+          <div class="nacts"><button class="ghost" type="button" onclick="mihomoApplyNow(this)">↻ 重试启动</button></div>
         </div>
         <p class="hint" data-i18n="mh-intro-hint">
           国内环境直连 http/socks 代理可能不通。Mihomo 桥在本机把<b>高加密飞行节点</b>（vless / vmess / trojan / ss /
@@ -1814,6 +1821,7 @@ const I18N_EN_HTML = {
   "mh-intro-hint": "Direct connections to http/socks proxies may fail inside CN networks. The Mihomo bridge wraps <b>high-encryption flight nodes</b> (vless / vmess / trojan / ss / hysteria2 / tuic / anytls — via subscriptions or share links) in front of your native proxies: muse account → local bridge port → flight node → original proxy → muse upstream. Flight nodes can also serve as pool egress <b>directly</b>.",
   "mh-nodes-hint": "\"Import to pool\" = <b>direct egress</b>: a local SOCKS port is allocated for the node and a proxy-pool entry is created — binding / rotation / failover behave exactly like any pool proxy. For chaining, use the \"Chaining\" section below.",
   "mh-chain-hint": "Wrap a pool http/socks proxy with an encrypted flight layer: <b>auto-select</b> (a url-test group picks the lowest-latency node and switches on failure) or a <b>pinned node</b>. Once enabled the proxy's egress becomes local bridge port → flight node → original proxy; pool health checks traverse the full chain automatically.",
+  "mh-error-title": "mihomo failed to start; the bridge is unavailable",
   /* ---- 代理池 ---- */
   "pool-add-hint": "Supports <code>http</code> / <code>socks5</code> / <code>socks5h</code>. Paste a full URL including credentials (e.g. <code>socks5://user:pass@proxy.example.com:1080</code>). Multiple lines import as a batch; <code>#</code> starts a comment; duplicates are skipped.",
   "pool-list-hint": "After an account <b>pins</b> a proxy, all of its traffic to muse upstream (browser, session checks, keep-alive) goes through it. On errors it moves to a healthy pool proxy automatically and <b>returns home</b> once the pinned proxy recovers. <b>Rotate</b> mode picks the next healthy proxy for every task. Deleting a bound proxy switches its accounts to rotation automatically.",
@@ -2935,6 +2943,13 @@ function renderMihomo(){
     enBtn.textContent = s.enabled ? t('停用桥接') : t('启用桥接');
     enBtn.className = s.enabled ? 'danger' : 'primary';
   }
+  // 启动失败要有醒目反馈（否则用户只看到"没反应"）
+  const errBanner = $('mhErrorBanner');
+  if (errBanner){
+    const show = s.enabled && !s.running && !!s.last_error;
+    errBanner.classList.toggle('hidden', !show);
+    if (show) $('mhErrorText').textContent = s.last_error;
+  }
   $('mhFacts').innerHTML =
     fact('启用状态', mhBadge(s.enabled, s.running)) +
     fact('进程 PID', s.running ? String(s.pid) : '—') +
@@ -3038,8 +3053,18 @@ async function mihomoToggleEnabled(){
   }catch(e){ toast('操作失败：' + e.message, 'bad'); }
 }
 
-async function mihomoDownloadBinary(btn){
+async function mihomoApplyNow(btn){
   if (btn) btn.disabled = true;
+  try{
+    await api('/admin/mihomo/apply', {method:'POST'});
+    await refreshMihomo();
+    if (mhStatus && mhStatus.running) toast('桥接已启动', 'ok');
+    else if (mhStatus && mhStatus.last_error) toast('启动失败：' + mhStatus.last_error.slice(0, 120), 'bad');
+  }catch(e){ toast('启动失败：' + e.message, 'bad'); }
+  finally{ if (btn) btn.disabled = false; }
+}
+
+async function mihomoDownloadBinary(btn){  if (btn) btn.disabled = true;
   try{
     await api('/admin/mihomo/binary/download', {method:'POST'});
     toast('已开始后台下载（国内走加速镜像）…', 'ok');
