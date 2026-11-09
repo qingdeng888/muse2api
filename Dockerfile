@@ -27,7 +27,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制代码与必要目录
-COPY admin.html app.py cdp.py config.py engine.py store.py proxy.py version.json ./
+# 用通配符而不是逐个列文件名：之前逐列导致新增模块（pool.py / mihomo.py）
+# 漏进镜像，容器启动即 ModuleNotFoundError。tests/ 与本地部署产物不复制。
+COPY *.py ./
+COPY admin.html version.json ./
 COPY deploy/ ./deploy/
 COPY extension/ ./extension/
 COPY tools/ ./tools/

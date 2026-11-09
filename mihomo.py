@@ -1094,8 +1094,9 @@ class MihomoBridge:
         def run():
             self.download = {"state": "downloading", "percent": 0, "error": ""}
             asset = self._asset_name()
-            target = os.path.join(CFG.base_dir, "bin",
-                                  "mihomo.exe" if os.name == "nt" else "mihomo")
+            # 下载到工作目录（data/mihomo）而不是 base_dir/bin：
+            # 容器里 /app/data 是持久卷，重建容器后二进制不用重下。
+            target = os.path.join(self.dir, "mihomo.exe" if os.name == "nt" else "mihomo")
             os.makedirs(os.path.dirname(target), exist_ok=True)
             part, tmp = target + ".part", target + ".tmp"
             last_err = ""

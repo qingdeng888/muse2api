@@ -1,0 +1,21 @@
+# 本地开发产物，不进镜像
+.git
+.gitignore
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.tmp
+.zcode
+tests
+data
+profiles
+bin
+pip-cache
+.pip-cache
+*.log
+ds2-main.zip
+start.bat
+.env
+.env.local
