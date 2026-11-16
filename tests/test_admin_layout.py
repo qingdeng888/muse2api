@@ -45,7 +45,7 @@ proxies=[{'id':'px-fixture','server':'socks5://203.0.113.10:1080','username':'',
  'enabled':True,'created_at':now-86400,'healthy':True,'checking':False,'latency_ms':120,'exit_ip':'203.0.113.9',
  'last_check':now-300,'last_error':'','bindings':1,
  # 已桥接到指定节点：下拉框必须回显该节点，而不是退回到「不桥接」
- 'bridge':{'flight':'link::FixtureNode','port':10802,'running':True}},
+ 'bridge':{'flight':'link::NodeOK','port':10802,'running':True}},
  {'id':'px-auto','server':'http://198.51.100.20:8080','username':'u','has_password':True,'label':'Auto-Bridge',
  'enabled':True,'created_at':now-80000,'healthy':True,'checking':False,'latency_ms':300,'exit_ip':'198.51.100.20',
  'last_check':now-300,'last_error':'','bindings':0,
@@ -70,9 +70,17 @@ class Handler(BaseHTTPRequestHandler):
          'download':{'state':'idle','percent':0,'error':''},'base_port':10801,'api_port':19090,
          'nodes':0,'subscriptions':0,'subscription_list':[],'chains':{},'port_map':{},'work_dir':'/tmp/mihomo'};kind='application/json'
   elif path=='/admin/mihomo/nodes':
-   data={'nodes':[{'key':'link::FixtureNode','name':'FixtureNode','type':'vless','server':'203.0.113.1',
-                   'port':443,'source':'链接导入','source_id':'link','enabled':True,'direct_port':None,
-                   'delay_ms':None,'delay_at':None,'delay_error':''}],'auto_group':'BRIDGE-AUTO'};kind='application/json'
+   data={'nodes':[
+    {'key':'link::NodeOK','name':'NodeOK','type':'vless','server':'203.0.113.1','port':443,
+     'source':'链接导入','source_id':'link','enabled':True,'direct_port':None,
+     'usable':True,'health':'ok','fail_streak':0,'delay_ms':120,'delay_at':now-100,'delay_error':''},
+    {'key':'link::NodeBad','name':'NodeBad','type':'ss','server':'203.0.113.2','port':8388,
+     'source':'链接导入','source_id':'link','enabled':True,'direct_port':None,
+     'usable':False,'health':'fail','fail_streak':2,'delay_ms':None,'delay_at':now-100,'delay_error':'Timeout'},
+    {'key':'link::NodeOff','name':'NodeOff','type':'trojan','server':'203.0.113.3','port':443,
+     'source':'链接导入','source_id':'link','enabled':False,'direct_port':None,
+     'usable':False,'health':'unknown','fail_streak':0,'delay_ms':None,'delay_at':None,'delay_error':''},
+   ],'auto_group':'BRIDGE-AUTO'};kind='application/json'
   elif path=='/admin/apikey':data={'api_key':'fixture-only'};kind='application/json'
   elif path in ['/admin/update/check','/admin/repo/status']:
    known=server_state['mode']=='update'
@@ -157,10 +165,10 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cl
    assert page.js("$('pxBulkCount').textContent==='0' && $('pxBulkTest').disabled")
    page.js("openPage('mihomo')")
    wait("$('mhFacts').children.length>0")
-   assert page.js("$('mhNodeBody').children.length===1 && $('mhSubBody').children.length===1")
+   assert page.js("$('mhNodeBody').children.length===3 && $('mhSubBody').children.length===1")
    assert page.js("$('mhRunBadge').textContent.length>0 && document.querySelectorAll('#mhChainBody tr').length>=1")
    # 关键回归：链式封装下拉框必须回显真实绑定（指定节点 / AUTO），不能一律显示「不桥接」
-   assert page.js("document.querySelector('#mhChainSel-px-fixture').value==='link::FixtureNode'"), \
+   assert page.js("document.querySelector('#mhChainSel-px-fixture').value==='link::NodeOK'"), \
        'chained-to-pinned-node row must display that node as selected'
    assert page.js("document.querySelector('#mhChainSel-px-auto').value==='AUTO'"), \
        'auto-escaped row must display AUTO as selected'
@@ -169,12 +177,26 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cl
    page.js("const s=document.querySelector('#mhChainSel-px-fixture'); s.value=''; s.dispatchEvent(new Event('change'))")
    assert page.js("JSON.stringify(window.__chainCalls)===JSON.stringify([['px-fixture',null]])"), \
        'selecting "no bridge" must send flight=null in one action'
-   # 飞行节点多选：全选 → 批量按钮可用 → 取消选择
+   # 飞行节点多选 + 筛选：筛出异常 → 全选只选中筛选结果 → 快速清理
+   assert page.js("$('mhNodeCount').textContent==='3'")
+   page.js("$('mhFilterHealth').value='fail';mhFilterChanged()")
+   wait("document.querySelectorAll('#mhNodeBody tr[data-nkey]').length===1")
+   assert page.js("document.querySelector('#mhNodeBody tr[data-nkey]').getAttribute('data-nkey')==='link::NodeBad'"), \
+       'health filter must show only failed nodes'
    page.js("$('mhNodeSelectAll').click()")
-   assert page.js("$('mhNodeSelCount').textContent==='1' && !$('mhNodeBulkEnable').disabled && !$('mhNodeBulkDisable').disabled && !$('mhNodeBulkDelete').disabled && !$('mhNodeBulkTest').disabled")
-   assert page.js("document.querySelector('#mhNodeBody tr[data-nkey]').classList.contains('px-selected')")
+   assert page.js("$('mhNodeSelCount').textContent==='1' && $('mhNodeSelectAll').checked && $('mhNodeSelectAll').indeterminate===false"), \
+       'select-all in filtered view must select only the filtered node'
+   page.js("$('mhFilterState').value='disabled';mhFilterChanged()")
+   assert page.js("document.querySelectorAll('#mhNodeBody tr[data-nkey]').length===0"), \
+       'health=fail + state=disabled must intersect to zero rows'
+   page.js("$('mhFilterHealth').value='';$('mhFilterState').value='';mhFilterChanged()")
+   assert page.js("document.querySelectorAll('#mhNodeBody tr[data-nkey]').length===3")
+   assert page.js("$('mhNodeSelCount').textContent==='1' && $('mhNodeSelectAll').indeterminate===true"), \
+       'selection persists across filter changes; tri-state visible'
+   page.js("$('mhNodeSelectAll').click()")
+   assert page.js("$('mhNodeSelCount').textContent==='3' && $('mhNodeSelectAll').checked")
    page.js("clearMhNodeSelection()")
-   assert page.js("$('mhNodeSelCount').textContent==='0' && $('mhNodeBulkDelete').disabled")
+   assert page.js("$('mhNodeSelCount').textContent==='0' && $('mhNodeBulkDelete').disabled && $('mhNodeSelectAll').checked===false")
   if not args.probe_only:
    assert not page.js('window.__errors')
    print('PASS: full-width layout, desktop controls, contained mobile scrolling, Chinese/English and test-without-saving')

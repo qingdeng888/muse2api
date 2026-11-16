@@ -759,6 +759,23 @@ details.raw pre{margin-top:6px}
           <button class="ghost" type="button" onclick="refreshMihomo()">↻ 刷新</button>
         </div>
         <p class="hint" data-i18n="mh-nodes-hint">「导入代理池」= 节点<b>直出</b>：为本节点分配一个本地 SOCKS 端口并创建代理池条目，绑定/轮询/故障转移与普通池代理完全一致。链式封装请到下方「链式封装」区。</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <span class="eyebrow"><span data-i18n="filter-label">筛选</span></span>
+          <select class="inp" id="mhFilterHealth" style="max-width:180px;padding:5px 26px 5px 9px;font-size:12px" onchange="mhFilterChanged()">
+            <option value="">健康：全部</option>
+            <option value="ok">健康：可用</option>
+            <option value="fail">健康：异常</option>
+            <option value="unknown">健康：未测</option>
+          </select>
+          <select class="inp" id="mhFilterState" style="max-width:180px;padding:5px 26px 5px 9px;font-size:12px" onchange="mhFilterChanged()">
+            <option value="">状态：全部</option>
+            <option value="enabled">状态：启用中</option>
+            <option value="disabled">状态：已停用</option>
+          </select>
+          <input class="inp" id="mhFilterText" type="text" placeholder="搜索节点名 / 服务器" data-no-i18n
+                 oninput="mhFilterChanged()" style="max-width:220px;padding:5px 9px;font-size:12px" spellcheck="false">
+          <span class="sub-line" id="mhFilterSummary"></span>
+        </div>
         <div class="bulk-bar" id="mhNodeBulkBar">
           <span class="eyebrow"><span data-i18n="selected-unit">已选</span> <span id="mhNodeSelCount">0</span></span>
           <button class="ghost mini" type="button" id="mhNodeBulkTest" onclick="mihomoTestSelectedNodes(this)" disabled>🧪 <span data-i18n="bulk-test">测试选中</span></button>
@@ -1920,6 +1937,13 @@ const I18N_EN_HTML = {
   "节点测试完成：X 个可用，Y 个失败": "Node test finished: X usable, Y failed",
   "桥未运行：请先在状态卡启用桥接再测试节点": "Bridge is not running: enable it in the status card before testing nodes",
   "请先选择节点": "Select nodes first",
+  /* ---- 节点筛选 ---- */
+  "筛选": "Filter",
+  "健康：全部": "Health: all", "健康：可用": "Health: usable", "健康：异常": "Health: failed", "健康：未测": "Health: untested",
+  "状态：全部": "State: all", "状态：启用中": "State: enabled", "状态：已停用": "State: disabled",
+  "搜索节点名 / 服务器": "Search name / server",
+  "筛选后 X / 共 Y 个": "Showing X of Y",
+  "当前筛选条件下没有节点": "No nodes match the current filter",
   /* ---- 排队与生成时限（v1.6.11 移植） ---- */
   "排队与生成时限": "Queue and generation timeouts", "queue budget": "queue budget",
   "排队不占用生成时限。任务获得并发槽位和账号后开始计算生成时间；重试时等待账号也不计入。": "Queue time does not consume the generation budget. Execution starts after acquiring a slot and account; retry account waits are excluded too.",
@@ -3093,14 +3117,26 @@ function renderMihomoSubs(){
 function renderMihomoNodes(){
   const tb = $('mhNodeBody');
   if (!tb) return;
-  $('mhNodeCount').textContent = mhNodes.length;
+  const visible = mhFilteredNodes();
+  const filtering = mhNodeFilter.health || mhNodeFilter.state || mhNodeFilter.text;
+  $('mhNodeCount').textContent = (filtering && visible.length !== mhNodes.length)
+    ? `${visible.length} / ${mhNodes.length}` : String(mhNodes.length);
+  if ($('mhFilterSummary')){
+    $('mhFilterSummary').textContent = filtering
+      ? t('筛选后 X / 共 Y 个').replace('X', visible.length).replace('Y', mhNodes.length)
+      : '';
+  }
   pruneMhNodeSelection();
   updateMhNodeSelectionUI();
   if (!mhNodes.length){
     tb.innerHTML = `<tr><td colspan="10" class="empty">${esc(t('没有飞行节点。添加订阅或导入分享链接'))}</td></tr>`;
     return;
   }
-  tb.innerHTML = mhNodes.map(n => {
+  if (!visible.length){
+    tb.innerHTML = `<tr><td colspan="10" class="empty">${esc(t('当前筛选条件下没有节点'))}</td></tr>`;
+    return;
+  }
+  tb.innerHTML = visible.map(n => {
     const direct = n.direct_port
       ? `<span class="badge ok">${n.direct_port}</span>`
       : '<span class="badge mute">—</span>';
@@ -3136,6 +3172,24 @@ function renderMihomoNodes(){
 /* --- 飞行节点多选与批量操作 --- */
 let _mhNodeSel = new Set();
 let _mhNodeBusy = false;
+let mhNodeFilter = { health: '', state: '', text: '' };
+
+function mhFilteredNodes(){
+  const q = (mhNodeFilter.text || '').trim().toLowerCase();
+  return mhNodes.filter(n => {
+    if (mhNodeFilter.state === 'enabled' && n.enabled === false) return false;
+    if (mhNodeFilter.state === 'disabled' && n.enabled !== false) return false;
+    if (mhNodeFilter.health && (n.health || 'unknown') !== mhNodeFilter.health) return false;
+    if (q && !(n.name.toLowerCase().includes(q) || `${n.server}:${n.port}`.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+function mhFilterChanged(){
+  mhNodeFilter.health = $('mhFilterHealth') ? $('mhFilterHealth').value : '';
+  mhNodeFilter.state = $('mhFilterState') ? $('mhFilterState').value : '';
+  mhNodeFilter.text = $('mhFilterText') ? $('mhFilterText').value : '';
+  renderMihomoNodes();
+}
 
 function pruneMhNodeSelection(){
   const valid = new Set(mhNodes.map(n => n.key));
@@ -3147,9 +3201,12 @@ function toggleMhNodeSelect(key){
   updateMhNodeSelectionUI();
 }
 function toggleMhNodeSelectAll(){
-  if (!mhNodes.length) return;
-  if (_mhNodeSel.size === mhNodes.length) _mhNodeSel.clear();
-  else _mhNodeSel = new Set(mhNodes.map(n => n.key));
+  // 全选只作用于当前筛选出的节点：筛出异常 → 全选 → 删除，即快速清理
+  const visible = mhFilteredNodes();
+  if (!visible.length) return;
+  const allSel = visible.every(n => _mhNodeSel.has(n.key));
+  if (allSel) visible.forEach(n => _mhNodeSel.delete(n.key));
+  else visible.forEach(n => _mhNodeSel.add(n.key));
   updateMhNodeSelectionUI();
 }
 function updateMhNodeSelectionUI(){
@@ -3160,10 +3217,12 @@ function updateMhNodeSelectionUI(){
     const b = $(id);
     if (b) b.disabled = _mhNodeBusy || !n;
   }
+  const visible = mhFilteredNodes();
+  const selVisible = visible.filter(x => _mhNodeSel.has(x.key)).length;
   const all = $('mhNodeSelectAll');
   if (all){
-    all.checked = mhNodes.length > 0 && n === mhNodes.length;
-    all.indeterminate = n > 0 && n < mhNodes.length;
+    all.checked = visible.length > 0 && selVisible === visible.length;
+    all.indeterminate = selVisible > 0 && selVisible < visible.length;
   }
   document.querySelectorAll('#mhNodeBody tr[data-nkey]').forEach(tr => {
     const key = tr.getAttribute('data-nkey');
