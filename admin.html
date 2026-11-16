@@ -726,7 +726,7 @@ details.raw pre{margin-top:6px}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
           <button class="ghost" type="button" onclick="mihomoSaveTimers(this)">💾 保存周期</button>
           <button class="ghost" type="button" onclick="mihomoSweepHealth(this)">🩺 立即巡检并筛选可用节点</button>
-          <button class="ghost" type="button" onclick="mihomoRefreshAllSubs(this)">↻ 立即刷新全部订阅</button>
+          <button class="ghost" type="button" onclick="mihomoRefreshAllSubs(this, false)">↻ 增量拉取订阅节点</button>
         </div>
         <div id="mhDownloadWrap" style="margin-top:10px">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -738,7 +738,11 @@ details.raw pre{margin-top:6px}
       </div>
 
       <div class="section">
-        <div class="section-head"><h3>飞行节点来源</h3><span class="spacer"></span><span class="eyebrow">subscriptions &amp; links</span></div>
+        <div class="section-head"><h3>飞行节点来源</h3><span class="spacer"></span>
+          <button class="ghost" type="button" onclick="mihomoRefreshAllSubs(this, false)" title="合并新节点；手动删除过的保持删除">↻ 增量拉取订阅节点</button>
+          <button class="primary" type="button" onclick="mihomoRefreshAllSubs(this, true)" title="重新拉取全部节点，含之前已删除的（同时清除它们的删除记录）">⬇ 全量拉取（含已删除节点）</button>
+          <span class="eyebrow">subscriptions &amp; links</span>
+        </div>
         <div class="form-grid">
           <div class="field"><label>订阅名称（可选）</label><input class="inp" id="mhSubName" placeholder="机场-A" autocomplete="off"></div>
           <div class="field"><label>订阅链接（Clash YAML / base64）</label><input class="inp" id="mhSubUrl" placeholder="https://…" autocomplete="off" spellcheck="false"></div>
@@ -1955,7 +1959,10 @@ const I18N_EN_HTML = {
   "订阅自动刷新周期（小时，0=关闭）": "Subscription auto-refresh interval (hours, 0=off)",
   "💾 保存周期": "💾 Save intervals",
   "🩺 立即巡检并筛选可用节点": "🩺 Run health check now",
-  "↻ 立即刷新全部订阅": "↻ Refresh all subscriptions",
+  "↻ 增量拉取订阅节点": "↻ Incremental pull",
+  "⬇ 全量拉取（含已删除节点）": "⬇ Full pull (incl. deleted)",
+  "已全量拉取 X 个订阅 · 共 Y 个节点（含已删除的）": "Full pull of X subscription(s) · Y nodes total (deleted ones restored)",
+  "已增量拉取 X 个订阅 · 共 Y 个节点（手动删除的未恢复）": "Incremental pull of X subscription(s) · Y nodes total (manually deleted stay deleted)",
   "可用节点": "Usable nodes", "异常节点": "Failed nodes", "未测速": "Untested", "上次巡检": "Last sweep",
   "可用": "Usable", "异常": "Failed", "未测": "Untested",
   "连续测速失败，已从自动选优剔除": "Repeated check failures; excluded from auto-select",
@@ -3380,15 +3387,21 @@ async function mihomoSweepHealth(btn){
   finally{ if (btn){ btn.disabled = false; btn.textContent = t('🩺 立即巡检并筛选可用节点'); } }
 }
 
-async function mihomoRefreshAllSubs(btn){
+async function mihomoRefreshAllSubs(btn, full){
+  const label = full ? t('⬇ 全量拉取（含已删除节点）') : t('↻ 增量拉取订阅节点');
   if (btn){ btn.disabled = true; btn.innerHTML = `<span class="loading"></span> ${esc(t('刷新中…'))}`; }
   try{
-    const r = await api('/admin/mihomo/subscriptions/refresh-all', {method:'POST'});
+    const r = await api('/admin/mihomo/subscriptions/refresh-all', {method:'POST', body: JSON.stringify({full: !!full})});
     const failed = (r.failed || []).length;
-    toast(`订阅刷新完成：成功 ${r.refreshed} 个${failed ? `，失败 ${failed} 个` : ''}`, failed ? 'warn' : 'ok');
+    mhNodes = r.nodes || mhNodes;
+    const total = (r.nodes || []).length;
+    const msg = full
+      ? t('已全量拉取 X 个订阅 · 共 Y 个节点（含已删除的）').replace('X', r.refreshed).replace('Y', total)
+      : t('已增量拉取 X 个订阅 · 共 Y 个节点（手动删除的未恢复）').replace('X', r.refreshed).replace('Y', total);
+    toast(msg + (failed ? t('，失败 Z 个').replace('Z', failed) : ''), failed ? 'warn' : 'ok');
     await refreshMihomo();
   }catch(e){ toast('刷新失败：' + e.message, 'bad'); }
-  finally{ if (btn){ btn.disabled = false; btn.textContent = t('↻ 立即刷新全部订阅'); } }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = label; } }
 }
 
 async function mihomoApplyNow(btn){

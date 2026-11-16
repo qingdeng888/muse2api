@@ -565,7 +565,9 @@ class MihomoBridge:
                 raise ValueError("订阅内容超过 16MB 上限")
         return parse_subscription_payload(body.decode(errors="replace"))
 
-    def refresh_subscription(self, sid: str) -> tuple[dict | None, str]:
+    def refresh_subscription(self, sid: str, full: bool = False) -> tuple[dict | None, str]:
+        """重新拉取单个订阅。full=True 全量（恢复已删除节点并清墓碑）；
+        full=False 增量（手动删除的节点保持删除）。"""
         with self._lock:
             sub = next((s for s in self._subscriptions if s["id"] == sid), None)
         if not sub:
@@ -577,7 +579,7 @@ class MihomoBridge:
         with self._lock:
             sub["updated_at"] = int(time.time())
             sub["node_count"] = len(nodes)
-            self._upsert_nodes(sid, nodes)
+            self._upsert_nodes(sid, nodes, replace_source=True, ignore_removed=full)
             self._save()
         return sub, ""
 
@@ -604,17 +606,23 @@ class MihomoBridge:
             self._save()
         return {"added": max(0, added)}
 
-    def _upsert_nodes(self, source: str, nodes: list[dict], replace_source: bool = True):
+    def _upsert_nodes(self, source: str, nodes: list[dict], replace_source: bool = True,
+                      ignore_removed: bool = False):
         """source::name 限定命名；同源替换、跨源共存。
 
         replace_source=True（订阅刷新）：同源旧节点全量替换，消失的节点随之移除。
         replace_source=False（分享链接追加）：按 key 合并，分次粘贴的链接不会互相覆盖。
-        已停用节点与手动删除的墓碑（_disabled/_removed）保持原状态。"""
+        ignore_removed=False（增量）：手动删除的墓碑生效，节点不复活。
+        ignore_removed=True（全量）：墓碑忽略并清除，已删除节点重新拉回。
+        两种模式的「停用」状态都保留——那是用户开关，与删除不同。"""
         fresh = []
         for n in nodes:
             key = f"{source}::{n['name']}"
             if key in self._removed:
-                continue                       # 用户手动删除过 → 刷新不复活
+                if ignore_removed:
+                    self._removed.discard(key)     # 全量拉取：墓碑一并清除
+                else:
+                    continue                       # 增量拉取：手动删除过 → 不复活
             raw = {k: v for k, v in n.items()}
             raw["name"] = key          # 内联进 mihomo 的名字用限定名
             fresh.append({"key": key, "source": source, "name": n["name"],
@@ -880,13 +888,13 @@ class MihomoBridge:
             self._save()
         return ""
 
-    def refresh_all_subscriptions(self) -> dict:
+    def refresh_all_subscriptions(self, full: bool = False) -> dict:
         """按需/定时刷新全部订阅。返回统计。"""
         with self._lock:
             subs = [dict(s) for s in self._subscriptions]
         refreshed, failed = 0, []
         for sub in subs:
-            _, err = self.refresh_subscription(sub["id"])
+            _, err = self.refresh_subscription(sub["id"], full=full)
             if err:
                 failed.append({"name": sub.get("name"), "error": err})
             else:
@@ -895,7 +903,7 @@ class MihomoBridge:
         with self._lock:
             self._last_sub_refresh = int(time.time())
             self._save()
-        return {"refreshed": refreshed, "failed": failed}
+        return {"refreshed": refreshed, "failed": failed, "full": full}
 
     def _health_loop(self):
         """后台定时任务：节点健康巡检 + 订阅自动刷新。"""

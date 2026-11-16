@@ -302,6 +302,32 @@ def test_chain_passes_pool_credentials():
     print("PASS: chain entries inherit pool credentials (field form and URL form)")
 
 
+
+def test_subscription_refresh_full_vs_incremental():
+    b = _fresh_bridge()
+    v1 = parse_share_links("vless://u@1.1.1.1:443#A" + chr(10) + "vless://u@2.2.2.2:443#B")
+    v2 = parse_share_links("vless://u@2.2.2.2:443#B" + chr(10) + "vless://u@3.3.3.3:443#C" + chr(10) + "vless://u@1.1.1.1:443#A")
+    b._fetch_subscription = lambda url: v1
+    sub, err = b.add_subscription("S", "https://sub.example/first")
+    assert not err
+    sid = sub["id"]
+    assert {n["key"] for n in b.list_nodes()} == {sid + "::A", sid + "::B"}
+    b.set_nodes_enabled([sid + "::A"], False)
+    b.remove_nodes([sid + "::B"])
+    b._fetch_subscription = lambda url: v2
+    b.refresh_subscription(sid)
+    keys = {n["key"]: n["enabled"] for n in b.list_nodes()}
+    assert set(keys) == {sid + "::A", sid + "::C"}, keys
+    assert keys[sid + "::A"] is False, "停用状态跨刷新保留"
+    _, err = b.refresh_subscription(sid, full=True)
+    assert not err
+    keys = {n["key"]: n["enabled"] for n in b.list_nodes()}
+    assert sid + "::B" in keys, "全量拉取必须恢复已删除节点"
+    assert sid + "::B" not in b._removed, "全量拉取应清除墓碑，否则后续增量继续拦截"
+    assert keys[sid + "::A"] is False
+    print("PASS: subscription refresh full-vs-incremental (tombstone cleared, disabled kept)")
+
+
 if __name__ == "__main__":
     test_share_link_parsers()
     test_subscription_payload_forms()
@@ -314,4 +340,6 @@ if __name__ == "__main__":
     test_prune_cleans_ports_and_chains()
     test_chain_passes_pool_credentials()
     test_timer_settings()
+    test_subscription_refresh_full_vs_incremental()
+    test_subscription_refresh_full_vs_incremental()
     print("ALL MIHOMO TESTS PASSED")

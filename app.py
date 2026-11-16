@@ -801,6 +801,10 @@ class MihomoLinkRequest(BaseModel):
     text: str = ""
 
 
+class MihomoRefreshRequest(BaseModel):
+    full: bool = False               # True=全量拉取（恢复已删除节点），False=增量
+
+
 class MihomoChainRequest(BaseModel):
     flight: str | None = None      # 'AUTO' | 飞行节点 key | None=关闭桥接
 
@@ -2505,8 +2509,10 @@ def mihomo_health_sweep(_=Depends(auth)):
 
 
 @app.post("/admin/mihomo/subscriptions/refresh-all")
-def mihomo_refresh_all_subs(_=Depends(auth)):
-    res = BRIDGE.refresh_all_subscriptions()
+def mihomo_refresh_all_subs(req: MihomoRefreshRequest | None = None, _=Depends(auth)):
+    """full=True 全量拉取（恢复已删除节点并清墓碑）；默认增量拉取。"""
+    full = bool(req.full) if req is not None else False
+    res = BRIDGE.refresh_all_subscriptions(full=full)
     BRIDGE.request_apply()
     return {"ok": True, **res, "nodes": BRIDGE.list_nodes(),
             "status": BRIDGE.status()}
@@ -2542,8 +2548,9 @@ def mihomo_add_sub(req: MihomoSubRequest, _=Depends(auth)):
 
 
 @app.post("/admin/mihomo/subscriptions/{sid}/refresh")
-def mihomo_refresh_sub(sid: str, _=Depends(auth)):
-    sub, err = BRIDGE.refresh_subscription(sid)
+def mihomo_refresh_sub(sid: str, req: MihomoRefreshRequest | None = None, _=Depends(auth)):
+    full = bool(req.full) if req is not None else False
+    sub, err = BRIDGE.refresh_subscription(sid, full=full)
     if err:
         raise HTTPException(400, err)
     BRIDGE.request_apply()
