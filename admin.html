@@ -792,7 +792,7 @@ details.raw pre{margin-top:6px}
 
     <!-- ==================== 05 获取 Cookie ==================== -->
     <section class="page hidden" id="page-cookie">
-      <div class="notice" id="extensionUpgradeNotice" role="note" data-i18n="extension-upgrade-notice"><span class="ic">⬆️</span><div class="nbody"><b>重要：请手动升级浏览器插件至 1.0.2</b><br>更新服务不会自动升级已加载的扩展。下载新包，替换原扩展目录文件，再到 <code>chrome://extensions</code> 或 <code>edge://extensions</code> 点击“重新加载”。不同浏览器个人资料需分别升级。<br><a href="https://github.com/czg86389-hub/muse2api/releases/download/v1.6.9/muse2api-chrome-extension-v1.6.9.zip">下载扩展 1.0.2</a>；油猴用户请升级脚本至 1.1.2。</div></div>
+      <div class="notice" id="extensionUpgradeNotice" role="note" data-i18n="extension-upgrade-notice"><span class="ic">⬆️</span><div class="nbody"><b>重要：请手动升级浏览器插件至 1.0.3</b><br>更新服务不会自动升级已加载的扩展。下载新包，替换原扩展目录文件，再到 <code>chrome://extensions</code> 或 <code>edge://extensions</code> 点击“重新加载”。不同浏览器个人资料需分别升级。<br><a href="/admin/extension">下载扩展 1.0.3</a>；油猴用户请升级脚本至 1.1.2。</div></div>
 
       <div class="section">
         <div class="section-head"><h3>方式一 · 浏览器扩展（推荐）</h3><span class="spacer"></span><span class="eyebrow">no terminal</span></div>
@@ -1139,6 +1139,16 @@ for chunk in resp:
         <p class="caption">以下为服务端当前生效配置（只读）。修改需编辑服务端 <code>.env</code> 后重启服务。</p>
         <dl class="facts" id="cfgFacts"></dl>
       </div>
+      <div class="section" id="generationQueuePanel">
+        <div class="section-head"><h3>排队与生成时限</h3><span class="spacer"></span><span class="eyebrow">queue budget</span></div>
+        <p class="hint">排队不占用生成时限。任务获得并发槽位和账号后开始计算生成时间；重试时等待账号也不计入。</p>
+        <form id="generationQueueForm" onsubmit="event.preventDefault();saveGenerationQueue()">
+          <div class="field" style="max-width:340px"><label for="generationQueueTimeout">独立排队时限（秒，0 为不限）</label>
+            <input class="inp" id="generationQueueTimeout" type="number" min="0" max="86400" required value="3600">
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:12px"><button class="primary" type="submit" id="generationQueueSave">保存排队设置</button><span class="hint" id="generationQueueSummary"></span></div>
+        </form>
+      </div>
       <div class="section">
         <div class="section-head"><h3>维护操作</h3><span class="spacer"></span><span class="eyebrow">maintenance</span></div>
         <p class="caption">对账号池全部账号立即执行一次静默保活与会话续期（后台守护进程默认每 15 分钟自动执行）。</p>
@@ -1147,6 +1157,12 @@ for chunk in resp:
     </section>
   </main>
 </div>
+
+<!-- ==================== 媒体预览弹窗（上游 v1.6.11：视频点开才加载，关闭即释放） ==================== -->
+<dialog id="mediaDialog" class="media-dialog" aria-labelledby="mediaPreviewTitle">
+  <header><h2 id="mediaPreviewTitle" data-no-i18n></h2><button class="ghost" type="button" onclick="closeMediaPreview()">关闭预览</button></header>
+  <div id="mediaPlayer"></div>
+</dialog>
 
 <!-- ==================== 代理配置弹窗（模式：直连 / 轮询 / 指定池内代理） ==================== -->
 <dialog id="proxyDialog" class="proxy-dialog" aria-labelledby="proxyTitle" aria-describedby="proxyHelp">
@@ -1198,6 +1214,14 @@ function setLang(v){
 }
 /* 整句：中文 → 英文（词典主体移植自旧版，覆盖服务端消息与本页全部静态文案） */
 const I18N_EN = {
+  "排队与生成时限": "Queue and generation timeouts",
+  "排队不占用生成时限。任务获得并发槽位和账号后开始计算生成时间；重试时等待账号也不计入。": "Queue time does not consume the generation budget. Execution starts after acquiring a slot and account; retry account waits are excluded too.",
+  "独立排队时限（秒，0 为不限）": "Separate queue timeout (seconds; 0 = unlimited)",
+  "保存排队设置": "Save queue settings",
+  "排队设置已保存": "Queue settings saved",
+
+"播放视频": "Play video",
+  "关闭预览": "Close preview",
   "代理配置已保存，账号浏览器状态待测试": "Proxy saved; account browser status still needs testing",
   "代理地址或完整链接": "Proxy address or full URL",
   "可直接粘贴包含用户名和密码的 HTTP、SOCKS5 或 SOCKS5h 链接，立即测试，无需先保存。": "Paste an HTTP, SOCKS5 or SOCKS5h URL including credentials and test it immediately, without saving.",
@@ -1254,7 +1278,6 @@ const I18N_EN = {
   "Muse 网页额度 · 反代 API": "Muse web quota · Reverse-proxy API",
   "打开 GitHub 开源仓库 (https://github.com/qingdeng888/muse2api)": "Open the GitHub repository (https://github.com/qingdeng888/muse2api)",
   "GitHub 仓库": "GitHub repo",
-  "社区认可与友情链接：LINUX DO 社区 (https://linux.do/)": "Community & friendly link: LINUX DO community (https://linux.do/)",
   "查看官方仓库最新版本状态与更新通知": "View the latest version status and update notices from the official repository",
   "版本检测": "Version check",
   "服务": "Service",
@@ -1269,7 +1292,7 @@ const I18N_EN = {
   "⚡ 一键在线升级并重启": "⚡ Upgrade online and restart",
   "查看更新内容": "View changes",
   "暂不提醒": "Remind me later",
-  "官方仓库版本检测与在线热升级": "Official repository version check & online hot upgrade",
+  "仓库版本检测与更新": "Official repository version check & online hot upgrade",
   "检测中…": "Checking…",
   "⚡ 一键从 GitHub 在线更新并重启": "⚡ Update from GitHub and restart",
   "🔍 立即重新检测更新": "🔍 Check for updates now",
@@ -1433,8 +1456,6 @@ const I18N_EN = {
   "需要「工具调用」的自主 Agent 模式": "Autonomous agent modes that need \"tool calling\"",
   "⚠️ 不可用": "⚠️ Not supported",
   "开源仓库：": "Source code: ",
-  "社区认可与友情链接：": "Community & friendly link: ",
-  "LINUX DO 社区 (https://linux.do/)": "LINUX DO community (https://linux.do/)",
   "一只戴宇航头盔的柴犬，赛博朋克风格，霓虹灯背景": "A Shiba Inu wearing a space helmet, cyberpunk style, neon background",
   "一只橙色小猫在草地上慢慢走动，阳光明媚": "An orange kitten slowly walking on the grass on a sunny day",
   "✓ 已登录": "✓ Logged in",
@@ -1820,7 +1841,7 @@ const I18N_EN_HTML = {
   "login-h1": "Muse web quota<br><span class=\"grad\">served as an OpenAI-compatible API</span>",
   "login-points": "<span><i></i>OpenAI-style API: downstream projects only change base_url and api_key</span><span><i></i>Multi-account LRU rotation with auto keep-alive to maximize quota usage</span><span><i></i>Test image, video and chat directly in this console</span>",
   "login-tip": "The Key is only stored in this browser (localStorage) and never sent to third parties. If forgotten, check <code>MUSE2API_KEY</code> in the server-side <code>.env</code>.",
-  "extension-upgrade-notice": "<b>Important: manually upgrade the extension to 1.0.2</b><br>Updating the service does not update unpacked extensions. Replace files in the original folder and click Reload at <code>chrome://extensions</code> or <code>edge://extensions</code>, separately for each browser profile.<br><a href=\"https://github.com/czg86389-hub/muse2api/releases/download/v1.6.9/muse2api-chrome-extension-v1.6.9.zip\">Download extension 1.0.2</a>; upgrade the userscript to 1.1.2.",
+  "extension-upgrade-notice": "<b>Important: manually upgrade the extension to 1.0.3</b><br>Updating the service does not update unpacked extensions. Replace files in the original folder and click Reload at <code>chrome://extensions</code> or <code>edge://extensions</code>, separately for each browser profile.<br><a href=\"/admin/extension\">Download extension 1.0.3</a>; upgrade the userscript to 1.1.2.",
   "repo-status-desc": "Comparing your local version with the latest version in the official GitHub repository… (online upgrades keep your <code>.env</code> keys and the <code>data/</code> Account Pool and media data)",
   "model-names-hint": "Model names: <code>muse-spark</code> (chat/code), <code>muse-image</code> (images), <code>muse-video</code> (videos). See the \"Integration\" page for full examples.",
   "add-account-hint": "Copy the <b>muse.ai</b> cookie string from your browser and paste it here. Required cookies: <code>hatch_sess</code>. <code>hatch_vml</code> is an optional workspace token and does not block import. For batch import, put one account per line in the format <code>label | cookie string</code> (label is optional).",
@@ -1899,6 +1920,12 @@ const I18N_EN_HTML = {
   "节点测试完成：X 个可用，Y 个失败": "Node test finished: X usable, Y failed",
   "桥未运行：请先在状态卡启用桥接再测试节点": "Bridge is not running: enable it in the status card before testing nodes",
   "请先选择节点": "Select nodes first",
+  /* ---- 排队与生成时限（v1.6.11 移植） ---- */
+  "排队与生成时限": "Queue and generation timeouts", "queue budget": "queue budget",
+  "排队不占用生成时限。任务获得并发槽位和账号后开始计算生成时间；重试时等待账号也不计入。": "Queue time does not consume the generation budget. Execution starts after acquiring a slot and account; retry account waits are excluded too.",
+  "独立排队时限（秒，0 为不限）": "Separate queue timeout (seconds; 0 = unlimited)",
+  "保存排队设置": "Save queue settings",
+  "排队设置已保存": "Queue settings saved",
   /* ---- 健康巡检与订阅定时刷新 ---- */
   "节点健康巡检周期（分钟）": "Node health check interval (minutes)",
   "订阅自动刷新周期（小时，0=关闭）": "Subscription auto-refresh interval (hours, 0=off)",
@@ -2522,6 +2549,7 @@ async function loadStatus(){
     $('pSvc').innerHTML = `<span class="led"></span>${esc(t('服务'))} <b>${esc(t('正常'))}</b>`;
     $('pBr').className = 'pill ' + (d.browser_running ? 'on' : 'off');
     $('pBr').innerHTML = `<span class="led"></span>${esc(t('浏览器'))} <b>${esc(d.browser_running ? t('运行中') : t('空闲'))}</b>`;
+    renderGenerationQueue(d.generation_queue, d.config);
     renderOverviewFacts();
     if ($('cfgFacts') && currentPage === 'settings') renderCfgFacts(d);
   }catch(e){
@@ -3576,6 +3604,34 @@ async function delAcc(id, label){
   }catch(e){ toast('删除失败：' + e.message, 'bad'); }
 }
 
+/* ================= 排队与生成时限（上游 v1.6.11 移植） ================= */
+let generationQueueLoaded = false;
+function renderGenerationQueue(settings, config){
+  if (!settings || !$('generationQueueTimeout')) return;
+  if (!generationQueueLoaded) { $('generationQueueTimeout').value = settings.queue_timeout; generationQueueLoaded = true; }
+  $('generationQueueSummary').textContent = LANG === 'en'
+    ? `Execution budget: video ${config.video_timeout}s · image ${config.image_timeout}s`
+    : `实际生成时限：视频 ${config.video_timeout} 秒 · 图片 ${config.image_timeout} 秒`;
+}
+async function saveGenerationQueue(){
+  if (!$('generationQueueForm').reportValidity()) return;
+  const button = $('generationQueueSave'); button.disabled = true;
+  try{
+    await api('/admin/generation-queue', {method:'PUT', body: JSON.stringify({queue_timeout: Number($('generationQueueTimeout').value)})});
+    generationQueueLoaded = false;
+    await loadStatus();
+    toast('排队设置已保存', 'ok');
+  }catch(e){ toast(e.message, 'bad'); }
+  finally{ button.disabled = false; }
+}
+function taskDuration(task){
+  if (task.total_elapsed == null && task.queue_elapsed == null) return t(task.elapsed ? `${task.elapsed}s` : '—');
+  const total = task.total_elapsed ?? Math.max(0, Date.now()/1000 - task.created_at);
+  const queue = task.status === 'queued' ? total : task.queue_elapsed || 0;
+  const generation = task.elapsed ?? (task.status === 'processing' ? Math.max(0, total - queue) : 0);
+  return `${LANG === 'en' ? 'Queue' : '排队'} ${queue.toFixed(1)}s<br>${LANG === 'en' ? 'Generate' : '生成'} ${generation.toFixed(1)}s<br>${LANG === 'en' ? 'Total' : '总计'} ${total.toFixed(1)}s`;
+}
+
 /* ================= 任务记录 ================= */
 async function loadTasks(){
   try{
@@ -3594,7 +3650,7 @@ async function loadTasks(){
         <td>${x.kind === 'video' ? `<span class="badge info">${esc(t('视频'))}</span>` : `<span class="badge info">${esc(t('图片'))}</span>`}</td>
         <td><span class="ellip" title="${esc(x.prompt)}">${esc(x.prompt)}</span></td>
         <td><span class="badge ${cls}">${esc(x.status)}</span></td>
-        <td class="mono">${x.elapsed ? x.elapsed + 's' : '—'}</td>
+        <td class="mono">${taskDuration(x)}</td>
         <td class="mono">${fmtTime(x.created_at)}</td>
         <td>${out}</td>
         <td><button class="danger mini" onclick="delTask('${x.id}')">${esc(t('删'))}</button></td>
@@ -3620,6 +3676,49 @@ async function clearTasks(){
 /* ================= 媒体库 ================= */
 let _allMedia = [];
 let _selectedMedia = new Set();
+
+function releaseMediaPlayer(){
+  const video = $('mediaPlayer').querySelector('video');
+  if (video){
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+  $('mediaPlayer').replaceChildren();
+}
+
+function closeMediaPreview(){
+  releaseMediaPlayer();
+  if ($('mediaDialog').open) $('mediaDialog').close();
+}
+
+$('mediaDialog').addEventListener('close', releaseMediaPlayer);
+$('mediaDialog').addEventListener('click', e => {
+  if (e.target === $('mediaDialog')) closeMediaPreview();
+});
+
+function openMediaPreview(name){
+  const media = _allMedia.find(m => m.name === name && m.kind === 'video');
+  if (!media) return;
+  releaseMediaPlayer();
+  $('mediaPreviewTitle').textContent = name;
+  const video = document.createElement('video');
+  video.controls = true;
+  video.playsInline = true;
+  video.preload = 'none';
+  // The original video URL is assigned only after an explicit click.
+  video.src = media.url;
+  $('mediaPlayer').appendChild(video);
+  if (!$('mediaDialog').open) $('mediaDialog').showModal();
+  video.play().catch(() => {}); // Controls remain available if autoplay is blocked.
+}
+
+$('mediaGrid').addEventListener('click', e => {
+  const trigger = e.target.closest('[data-play-video]');
+  if (!trigger || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  openMediaPreview(trigger.closest('.tile').dataset.name);
+});
 
 function updateMediaSelectionUI(){
   const count = _selectedMedia.size;
@@ -3691,6 +3790,7 @@ function openLightbox(name, kind, url, bytes, mtime){
 }
 function closeLightbox(){ $('lightbox').classList.add('hidden'); $('lightbox-card').innerHTML = ''; }
 async function loadMedia(){
+  closeMediaPreview();
   try{
     const d = await api('/admin/media');
     const ms = d.media || [];
@@ -3712,9 +3812,12 @@ async function loadMedia(){
         <label class="check-tag" title="${esc(t('勾选以批量操作'))}" onclick="event.stopPropagation()">
           <input type="checkbox" class="tile-check" ${isSel ? 'checked' : ''} onchange="toggleMediaSelect('${esc(m.name)}')">
         </label>
-        <div class="thumb">${m.kind === 'video'
-          ? `<video src="${esc(m.url)}" muted playsinline preload="metadata"></video>`
-          : `<img src="${esc(m.url)}" loading="lazy" alt="">`}</div>
+        ${m.kind === 'video'
+          ? `<button type="button" class="thumb" data-play-video aria-label="播放视频" title="播放视频">
+              ${m.thumbnail_url ? `<img src="${esc(m.thumbnail_url)}" loading="lazy" decoding="async" alt="" onerror="this.hidden=true">` : ''}
+              <span class="play-icon" aria-hidden="true">▶</span>
+            </button>`
+          : `<div class="thumb"><img src="${esc(m.url)}" loading="lazy" alt=""></div>`}
         <div class="meta">
           <div class="nm" title="${esc(m.name)}">${esc(m.name)}</div>
           <div style="margin-top:3px">${fmtBytes(m.bytes)} · ${fmtTime(m.mtime)}</div>

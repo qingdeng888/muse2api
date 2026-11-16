@@ -222,6 +222,21 @@ class MuseProxyError(MuseGenerationError):
     """The account's configured proxy failed; this is not Cookie invalidation."""
 
 
+class MuseSessionUnavailable(MuseGenerationError):
+    """/api/session returned 200 without an assigned workspace.
+
+    muse.ai may rotate hatch_sess / hatch_gw in that same response and revoke the old
+    values, so the merged cookies are carried here and callers must keep using them.
+    """
+
+    def __init__(self, message: str, cookies: dict | None = None,
+                 cookies_exp: dict | None = None, rotated: bool = False):
+        super().__init__(message)
+        self.cookies = cookies or {}
+        self.cookies_exp = cookies_exp or {}
+        self.rotated = rotated
+
+
 class MuseModelRefusalError(MuseGenerationError):
     """Muse completed the turn with text instead of the requested media."""
 
@@ -571,13 +586,24 @@ class MuseEngine:
                 sj = r.json()
             except ValueError:
                 raise MuseGenerationError("/api/session HTTP 200 返回非 JSON；会话状态未确认") from None
-            if not isinstance(sj, dict) or sj.get("status") != "assigned":
+            if not isinstance(sj, dict):
                 raise MuseGenerationError("/api/session HTTP 200 未返回 assigned 会话；请在官网检查账号/工作区状态")
+            # A genuine session answer may rotate credentials even when no workspace is
+            # assigned. Harvest Set-Cookie before evaluating the workspace status.
+            rotated = False
             for c in r.cookies:
                 if c.value:
+                    if cur_cookies.get(c.name) != c.value:
+                        rotated = True
                     cur_cookies[c.name] = c.value
                 if c.expires:
                     cur_exp[c.name] = int(float(c.expires))
+            if sj.get("status") != "assigned":
+                status = sj.get("status")
+                raise MuseSessionUnavailable(
+                    f"/api/session HTTP 200 未返回 assigned 会话（status={status}）；"
+                    f"工作区暂未分配，已保留 muse.ai 轮换下发的新 cookie",
+                    cur_cookies, cur_exp, rotated)
             vm_id = sj.get("vm_id")
             vm_state = sj.get("vm_state")
             wake_ok = False
@@ -593,12 +619,23 @@ class MuseEngine:
                     if proxy and rw.status_code == 407:
                         raise MuseProxyError("账号代理认证失败 (HTTP 407)，未完成 VM 唤醒")
                     wake_requested = rw.status_code == 200
+                    for c in rw.cookies:
+                        if c.value:
+                            cur_cookies[c.name] = c.value
+                        if c.expires:
+                            cur_exp[c.name] = int(float(c.expires))
+                    headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cur_cookies.items() if v)
                     if wake_requested:
                         # HTTP 200 acknowledges the request; only session state confirms the VM woke.
                         verify = requests.get("https://muse.ai/api/session", headers=headers,
                                               timeout=12, allow_redirects=False, **proxy_options)
                         if proxy and verify.status_code == 407:
                             raise MuseProxyError("账号代理认证失败 (HTTP 407)，未完成 VM 状态确认")
+                        for c in verify.cookies:
+                            if c.value:
+                                cur_cookies[c.name] = c.value
+                            if c.expires:
+                                cur_exp[c.name] = int(float(c.expires))
                         if verify.status_code == 200:
                             verified_session = verify.json()
                             if isinstance(verified_session, dict) and verified_session.get("status") == "assigned":
@@ -743,6 +780,18 @@ class MuseEngine:
         except Exception:
             pass
 
+    # Set by the app: persist cookies that muse.ai rotated during an engine-side renewal.
+    cookie_sink = None
+
+    def _report_rotated_cookies(self, account_id, cookies: dict, expires: dict | None):
+        sink = self.cookie_sink
+        if not (sink and account_id and cookies):
+            return
+        try:
+            sink(account_id, dict(cookies), dict(expires or {}))
+        except Exception as e:  # noqa: BLE001
+            log.warning("保存轮换后的 cookie 失败 %s: %s", account_id, e)
+
     def ensure_page(self, cookies: dict, expires: dict | None = None, account_id: str | None = None):
         resolver = getattr(self, "proxy_resolver", None)
         local = self._ensure_local()
@@ -776,6 +825,16 @@ class MuseEngine:
                     last_map[account_id] = now_ts
             except (MuseAuthError, MuseProxyError):
                 raise
+            except MuseSessionUnavailable as e:
+                if e.cookies:
+                    cookies = e.cookies
+                    expires = e.cookies_exp or expires
+                    if e.rotated:
+                        self._report_rotated_cookies(account_id, cookies, expires)
+                if account_id:
+                    last_map[account_id] = now_ts
+                log.warning("预续签 /api/session 未分配工作区（继续用%s cookie 加载页面）: %s",
+                            "轮换后的新" if e.rotated else "现有", e)
             except Exception as e:
                 log.warning("预续签 /api/session 失败（继续尝试浏览器加载）: %s", e)
 
@@ -1014,11 +1073,52 @@ class MuseEngine:
     # 检查「文字真的进了输入框 + Send 按钮真的被渲染出来」。
     # 两个条件缺一不可：Send 按钮只有 React state 里有文字才会渲染 ——
     # 它在，就说明 React 真的收到了输入（不是 DOM value 被改了而已）。
+    _SEND_BUTTON_JS = r"""(function(){
+        function visible(e){
+            return e.getClientRects().length > 0
+                && getComputedStyle(e).visibility !== 'hidden';
+        }
+        var ta = document.activeElement;
+        if (!ta || !ta.matches('textarea') || !visible(ta)) {
+            ta = Array.from(document.querySelectorAll('textarea')).find(visible);
+        }
+        if (!ta) return null;
+        var label = /^(?:send(?:\s+message)?|发送(?:消息)?|發送(?:訊息)?|傳送(?:訊息)?|送出)$/i;
+        var testId = /^(?:hatch-composer-send-button|composer-send-button|send-button)$/i;
+        function isSend(b){
+            // The Send button itself uses the bg-chat-user-bubble color class.
+            // Exclude message containers, not buttons carrying that color token.
+            if (!visible(b) || b.closest('aside,nav,[role="navigation"],'
+                + 'div[class*="chat-user-bubble"],div[class*="group/msg"],'
+                + 'div[class*="hatch-chat-groupable-bubble"]')) return false;
+            return label.test((b.getAttribute('aria-label') || '').trim())
+                || testId.test((b.getAttribute('data-testid') || '').trim())
+                || label.test((b.innerText || '').trim());
+        }
+        // Search the nearest composer first. Never search the whole document:
+        // a history preview may itself contain "send", "Resend" or "Send feedback".
+        for (var r = ta.parentElement; r && r !== document.body; r = r.parentElement) {
+            var b = Array.from(r.querySelectorAll('button,[role="button"]')).find(isSend);
+            if (b) return b;
+            if (r.matches('form,main,[role="main"]')) break;
+        }
+        return null;
+    })()"""
+    _SEND_DISABLED_JS = (
+        "b.disabled || b.matches(':disabled')"
+        " || b.getAttribute('aria-disabled') === 'true' || b.closest('[inert]')"
+    )
     _SEND_STATE_JS = (
         "(function(){var ta=document.querySelector('textarea');"
-        "var b=[...document.querySelectorAll('button,[role=button]')]"
-        ".find(function(x){return /send/i.test(x.getAttribute('aria-label')||'');});"
-        "return JSON.stringify({v:ta?ta.value:'',btn:b?(b.disabled?2:1):0});})()"
+        "var b=" + _SEND_BUTTON_JS + ";"
+        "return JSON.stringify({v:ta?ta.value:'',btn:b?("
+        + _SEND_DISABLED_JS + "?2:1):0});})()"
+    )
+    _CLICK_SEND_JS = (
+        "(function(){var b=" + _SEND_BUTTON_JS + ";"
+        "if(!b)return 'no-button';"
+        "if(" + _SEND_DISABLED_JS + ")return 'disabled';"
+        "b.click();return 'clicked';})()"
     )
 
     def _send(self, prompt: str):
@@ -1069,15 +1169,7 @@ class MuseEngine:
         clicked = "no-button"
         t_deadline = time.time() + 3.0
         while time.time() < t_deadline:
-            res = self.page.js(
-                "(function(){var b=[...document.querySelectorAll('button,[role=button]')]"
-                ".filter(function(x){return x.offsetParent!==null;})"
-                ".find(function(x){return /发送|send/i.test(x.getAttribute('aria-label')||'')"
-                "||/发送|send/i.test(x.getAttribute('data-testid')||'')"
-                "||/send/i.test(x.innerText||'');});"
-                "if(!b)return 'no-button';"
-                "if(b.disabled)return 'disabled';"
-                "b.click();return 'clicked';})()")
+            res = self._click_send()
             if res == "clicked":
                 clicked = "clicked"
                 break
@@ -1119,17 +1211,9 @@ class MuseEngine:
         return "、".join(parts)
 
     def _click_send(self) -> str:
-        """只点发送按钮（不重新填字），返回 clicked / disabled / no-button。"""
+        """只点当前输入框的发送按钮（不重新填字），不把点击等同于上游送达。"""
         try:
-            return str(self.page.js(
-                "(function(){var b=[...document.querySelectorAll('button,[role=button]')]"
-                ".filter(function(x){return x.offsetParent!==null;})"
-                ".find(function(x){return /发送|send/i.test(x.getAttribute('aria-label')||'')"
-                "||/发送|send/i.test(x.getAttribute('data-testid')||'')"
-                "||/send/i.test(x.innerText||'');});"
-                "if(!b)return 'no-button';"
-                "if(b.disabled)return 'disabled';"
-                "b.click();return 'clicked';})()"))
+            return str(self.page.js(self._CLICK_SEND_JS))
         except Exception:  # noqa: BLE001
             return "error"
 

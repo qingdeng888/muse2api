@@ -1,19 +1,23 @@
 {
-  "version": "1.6.9",
-  "updated_at": "2026-11-05",
+  "version": "1.6.11",
+  "updated_at": "2026-11-15",
   "repo": "https://github.com/qingdeng888/muse2api",
   "highlights": [
-    "修复 1.6.8 代理检测结果未回写的问题：测试当前已保存的代理后，账号列表会更新为已连通、未通过或未测试。 升级后，对之前显示未确认的账号重新点一次“测试连通性”，即可写入实际结果。",
-    "先测试新链接再保存时，仅复用 5 分钟内、同账号、同节点及认证、同登录会话的服务端实测结果，避免刚测通过又显示未确认。",
-    "更换节点、密码或 Cookie、结果过期时不会继承旧成功；失败结果仍显示未通过，代理连通不等于账号浏览器或生成能力正常。",
-    "不同配置的临时测试继续不改已保存路线或账号健康；无检测记录显示“代理未测试”，不再被空记录误标为“代理未确认”。",
-    "更新服务后请强制刷新管理页。插件仍为 1.0.2、油猴脚本仍为 1.1.2；当前版本无需重装，旧插件需在每个浏览器个人资料中手动升级。"
+    "修复工作区暂未分配时丢弃新 Cookie 的问题；保存轮换后的登录态，但不把未确认会话标成成功。",
+    "浏览器插件升级至 1.0.3：按当前普通/无痕窗口读取 Cookie，避免导入另一个窗口的账号；找不到存储区时停止导入。",
+    "图片和视频采用独立排队时限（默认 3600 秒，0 为不限）；排队不消耗生成预算，失败记录保留账号、尝试次数和原始错误。",
+    "检查更新只读：如实区分本地版本/提交与远端状态；有更新时提醒，由管理员手动确认升级，任务排队或运行期间拒绝更新。",
+    "媒体库只加载视频缩略图，点击后才加载所选视频，关闭预览释放播放器；源部署需 FFmpeg，Docker 用户请重建镜像。",
+    "组合修复聊天与媒体的资源获取顺序、排队设置跨域 PUT 和固定提交版本读取；继续保留独立代理、轮询及会话健康检查。",
+    "请先更新服务，再手动升级插件 1.0.3：替换原目录并重新加载；每个浏览器个人资料分别升级，无痕模式还需允许扩展运行。油猴脚本仍为 1.1.2。"
   ],
   "highlights_en": [
-    "Fix the 1.6.8 proxy-status regression: testing the currently saved proxy now updates the account-list connectivity result. After upgrading, retest accounts with old unconfirmed records once to persist an actual result.",
-    "When saving a newly tested URL, adopt only a server-observed result from the last five minutes for the same account, route, credentials and login session.",
-    "Changed routes, passwords or cookies and expired receipts never inherit success. Failed checks stay failed; proxy reachability does not prove browser or generation readiness.",
-    "Testing a different unsaved configuration still leaves the saved route and account health unchanged. Empty records display Proxy untested instead of Proxy unconfirmed.",
-    "Hard-refresh after updating. Extension remains 1.0.2 and userscript 1.1.2; current versions need no reinstall. Update older extensions manually in every browser profile."
+    "Preserve cookies rotated by unassigned-workspace responses without marking an unconfirmed session healthy.",
+    "Extension 1.0.3 reads the active regular/incognito window cookie store and stops instead of importing from another store when identification fails.",
+    "Image/video queue waits have a separate budget (3600 seconds by default; 0 means unlimited). Failed tasks retain account, attempt and original error.",
+    "Update checks are read-only and report installed provenance separately. Updates notify administrators and require explicit confirmation; queued/running work blocks upgrades.",
+    "The media library lazily loads video thumbnails and requests a video only on playback. Source deployments need FFmpeg; Docker users should rebuild images.",
+    "Integration fixes align chat/media resource acquisition, allow queue-setting PUT preflights and bind remote version metadata to one commit.",
+    "Update the service, then manually upgrade extension 1.0.3 in every browser profile by replacing files and reloading. Allow the extension in Incognito/InPrivate when needed. Userscript remains 1.1.2."
   ]
 }

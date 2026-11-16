@@ -1,4 +1,4 @@
-"""Real Chromium dashboard checks with synthetic accounts; no Muse login or external API."""
+"""Chromium UI checks: provenance, manual updates, lazy video and layout; fixtures only."""
 import argparse,base64,os,json,shutil,socket,signal,subprocess,sys,tempfile,threading,time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -51,10 +51,17 @@ proxies=[{'id':'px-fixture','server':'socks5://203.0.113.10:1080','username':'',
  'last_check':now-300,'last_error':'','bindings':0,
  'bridge':{'flight':'AUTO','port':10803,'running':True}}]
 events=[]
+network=[]
+server_state={'mode':'update'}
+feature_errors=[]
+def check(value,message):
+ if not value:feature_errors.append(message)
+
 class Handler(BaseHTTPRequestHandler):
  def log_message(self,*a):pass
  def do_GET(self):
   path=urlsplit(self.path).path
+  network.append({'method':'GET','path':path})
   if path in ['/','/admin']:data=html;kind='text/html; charset=utf-8'
   elif path=='/admin/accounts':data={'accounts':accounts,'stats':{'total':8,'healthy':8}};kind='application/json'
   elif path=='/admin/proxies':data={'proxies':proxies};kind='application/json'
@@ -68,8 +75,15 @@ class Handler(BaseHTTPRequestHandler):
                    'delay_ms':None,'delay_at':None,'delay_error':''}],'auto_group':'BRIDGE-AUTO'};kind='application/json'
   elif path=='/admin/apikey':data={'api_key':'fixture-only'};kind='application/json'
   elif path in ['/admin/update/check','/admin/repo/status']:
-   data={'local_version':VERSION,'remote_version':VERSION,'local_sha':'fixture','remote_sha':'fixture','up_to_date':True,'has_update':False,'recent_commits':[]};kind='application/json'
-  else:data={'browser_running':True,'media_count':0,'status':'ok'};kind='application/json'
+   known=server_state['mode']=='update'
+   data={'repo_url':'https://github.com/czg86389-hub/muse2api','repo_ref':'main','local_version':'1.6.10','remote_version':VERSION if known else '', 'local_sha':'aaaaaaa','remote_sha':'bbbbbbb' if known else '', 'up_to_date':False if known else None,'has_update':known,'check_error':'' if known else 'fixture remote unavailable','managed_deployment':False,'highlights':['fixture update'],'highlights_en':['fixture update'],'recent_commits':[]};kind='application/json'
+  elif path=='/admin/media':
+   data={'count':2,'media':[{'name':name,'kind':'video','url':'/v1/media/'+name,'thumbnail_url':'/v1/media/'+name+'/thumbnail','bytes':4000,'mtime':now}for name in ['clip-one.mp4','clip-two.mp4']]};kind='application/json'
+  elif path=='/admin/tasks':
+   data={'tasks':[{'id':'fixture-task','kind':'video','prompt':'fixture task','status':'failed','error':'fixture failure','created_at':now-7,'account':'fixture00000','queue_elapsed':2.0,'elapsed':5.0,'total_elapsed':7.0,'attempt':1}]};kind='application/json'
+  elif path.endswith('/thumbnail'):data=thumbnail_bytes;kind='image/jpeg'
+  elif path.endswith('.mp4'):data=video_bytes;kind='video/mp4'
+  else:data={'browser_running':True,'media_count':2,'status':'ok','generation_queue':{'queue_timeout':3600},'config':{'image_timeout':240,'video_timeout':600}};kind='application/json'
   body=data if isinstance(data,bytes) else json.dumps(data).encode()
   self.send_response(200);self.send_header('Content-Type',kind);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
  def do_POST(self):
@@ -94,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cl
    except (requests.RequestException,StopIteration):time.sleep(.1)
   assert page
   page.send('Page.enable');page.send('Runtime.enable')
-  page.send('Page.addScriptToEvaluateOnNewDocument',{'source':"localStorage.setItem('muse2api_lang',localStorage.getItem('muse2api_lang')||'zh');window.__errors=[];window.addEventListener('error',e=>__errors.push(e.message));"})
+  page.send('Page.addScriptToEvaluateOnNewDocument',{'source':"localStorage.setItem('muse2api_lang',localStorage.getItem('muse2api_lang')||'zh');window.__confirms=[];window.confirm=(m)=>{window.__confirms.push(m);return false};window.__errors=[];window.addEventListener('error',e=>__errors.push(e.message));"})
   page.send('Page.navigate',{'url':f'http://127.0.0.1:{server.server_port}/?key=fixture-only'})
   def wait(expr):
    end=time.monotonic()+15
@@ -164,6 +178,8 @@ with tempfile.TemporaryDirectory(prefix='muse-layout-',dir=Path.home(),ignore_cl
   if not args.probe_only:
    assert not page.js('window.__errors')
    print('PASS: full-width layout, desktop controls, contained mobile scrolling, Chinese/English and test-without-saving')
+   print('FEATURE_ERRORS',json.dumps(feature_errors),flush=True)
+   assert not feature_errors,feature_errors
  finally:
   if page:
    try:page.send('Browser.close')

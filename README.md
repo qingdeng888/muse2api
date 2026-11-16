@@ -6,11 +6,6 @@
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker" alt="Docker" />
   <img src="https://img.shields.io/badge/API-OpenAI%20Compatible-green" alt="OpenAI API Compatible" />
   <img src="https://img.shields.io/badge/License-MIT-orange" alt="License" />
-  <a href="https://linux.do/" target="_blank"><img src="https://img.shields.io/badge/Community-LINUX%20DO-111827?logo=linux&logoColor=white" alt="LINUX DO" /></a>
-</p>
-
-<p align="center">
-  🤝 本开源项目已链接并认可 <b><a href="https://linux.do/" target="_blank">LINUX DO 社区 (https://linux.do/)</a></b> —— 新的理想型社区（真诚、友善、团结、专业）
 </p>
 
 将 **[muse.ai](https://muse.ai/)** 网页端的前沿多模态能力逆向工程封装为标准的 **OpenAI 兼容 RESTful API**。通过无头浏览器 CDP 协议穿透、热备 WebSocket 隧道复用与动态 Session 管理，原生支持文本对话（2~3 秒级流式首字响应）、文生图、图生图编辑、文生视频、首帧图生视频，并提供多账号池亲和轮转、全自动 48 小时会话续期与云端 VM 唤醒保活，以及配套 Chrome 一键导号扩展。
@@ -41,6 +36,17 @@ Upload one product photo and get talking-head sales videos, story-style ad short
 
 
 ---
+
+
+## v1.6.11 升级事项
+
+- **扩展必须手动升级至 1.0.3**：先更新服务，从管理页下载本实例的扩展包，替换原扩展目录后在浏览器扩展管理页重新加载；不同浏览器个人资料分别升级。无痕/InPrivate 使用时，需允许扩展在无痕窗口运行。导入只表示保存登录态，请继续测试账号。
+- **检查更新不会自动改动代码或重启**：面板显示真实已安装版本和远端状态，由管理员手动确认升级；已有排队或运行任务时拒绝升级。镜像部署可设置 MUSE2API_MANAGED_DEPLOYMENT=1，通过重建镜像更新。
+- **排队与生成分开计时**：管理页可设置独立排队时限，默认 3600 秒，0 表示不限；图片长任务仍推荐异步任务接口。
+- **视频库使用缩略图**：源码部署需安装 FFmpeg；Docker 用户请重建镜像。仅更新 Python 源码不会为旧容器安装系统依赖。
+
+Extension 1.0.3 requires a manual reload in every browser profile. Update checks are read-only; confirm upgrades explicitly. Rebuild Docker images for FFmpeg thumbnail support.
+
 
 ## 🌟 核心特性
 
@@ -77,6 +83,7 @@ Upload one product photo and get talking-head sales videos, story-style ad short
   - 无需手工 F12 抓包，点一下扩展图标即刻将当前浏览器登录态（含 `HttpOnly` 核心 Cookie 与真实过期时间）提取并安全推送至账号池。
 - 🖥️ **现代化深色运维面板（Web Console）与实时在线热升级**
   - 内置开箱即用的 Web UI，支持实时查看服务健康度、账号池额度与状态、一键全池保活、任务进度回放、媒体库管理与在线接口调试。
+  - 媒体库的视频列表仅懒加载 JPEG 缩略图，点击封面或「打开」才加载该视频，关闭预览即释放播放器。缩略图由 FFmpeg 按需生成，缓存在 `data/thumbnails/`，删除媒体时同步清理；旧视频无需重新生成。Docker 镜像已包含 FFmpeg，手动部署需安装 `ffmpeg`；缺少依赖或视频损坏时显示播放占位，不会回退为预加载原视频。
   - **全网节点实时更新广播与一键升级**：当 `qingdeng888/muse2api` 仓库发布新版本或修复时，所有已部署节点的管理后台顶部会自动弹出更新通知横幅，点击 **「⚡ 一键在线升级并重启」** 即可自动拉取最新代码并平滑重启（自动保留本地 `.env` 配置与账号数据）。
 
 ---
@@ -140,7 +147,7 @@ docker compose -f docker-compose.local.yml up -d --build
 1. **安装系统依赖与 Chromium**：
    ```bash
    sudo apt-get update
-   sudo apt-get install -y chromium fonts-wqy-zenhei python3 python3-pip python3-venv
+   sudo apt-get install -y chromium ffmpeg fonts-wqy-zenhei python3 python3-pip python3-venv
    ```
 
 2. **配置 Python 虚拟环境**：
@@ -452,14 +459,6 @@ python tests/test_ref_image_safety.py
 
 ---
 
-## 🤝 社区认可与友情链接
-
-本项目已链接并高度认可 **[LINUX DO 社区](https://linux.do/)**，感谢社区佬友的交流、反馈与支持：
-
-- 🌐 **[LINUX DO 社区 (https://linux.do/)](https://linux.do/)** —— 新的理想型社区（真诚、友善、团结、专业，共建你我引以为荣之社区）
-
----
-
 ## 👥 贡献者致谢 (Contributors)
 
 感谢以下开发者对 MUSE2API 的代码贡献与功能优化（按 PR 合入顺序排列）：
@@ -475,6 +474,11 @@ python tests/test_ref_image_safety.py
 - 🌟 **[@pandalaohe](https://github.com/pandalaohe)** (PR [#24](https://github.com/czg86389-hub/muse2api/pull/24)) —— 提供参考图本地文件与私网 URL 安全策略、重定向复查和 DNS 重绑定防护
 - 🌟 **[@QuartzWarrior](https://github.com/QuartzWarrior)** (PR [#25](https://github.com/czg86389-hub/muse2api/pull/25)) —— 贡献账号独立 HTTP 代理基础、认证转接、配置界面与隔离回归测试
 - [@Roins-hub](https://github.com/Roins-hub)：新版 Muse 输入区兼容、视频/音频/文档参考素材（PR #40）。
+
+- [@WXJJ0520](https://github.com/WXJJ0520)：限定当前输入区域的发送按钮，修复侧栏历史误匹配并增加真实 Chromium 回归（PR [#48](https://github.com/czg86389-hub/muse2api/pull/48)）。
+
+- [@Yeadon8888](https://github.com/Yeadon8888)：保留未分配会话响应中的 Cookie 轮换，避免后续继续使用失效旧值（PR [#60](https://github.com/czg86389-hub/muse2api/pull/60)）。
+- [@ALight777](https://github.com/ALight777)：当前窗口 Cookie 存储区隔离、独立排队预算、真实版本报告与只读更新检查、视频缩略图（PR [#58](https://github.com/czg86389-hub/muse2api/pull/58)、[#55](https://github.com/czg86389-hub/muse2api/pull/55)、[#57](https://github.com/czg86389-hub/muse2api/pull/57)、[#51](https://github.com/czg86389-hub/muse2api/pull/51)）。
 
 欢迎大家提交 PR 与 Issue，共同把项目打磨得更强更好用！
 
